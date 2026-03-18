@@ -392,9 +392,12 @@ input[type="number"] {
   background: white;
   border-left: 1px solid var(--border);
   position: relative;
-  display: flex;
+  display: none;
   flex-direction: column;
   overflow: hidden;
+}
+#panel-compare:not([hidden]) {
+  display: flex;
 }
 .compare-vs {
   position: absolute;

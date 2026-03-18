@@ -751,7 +751,7 @@ function processAndDrawCompareChart() {
   }
 
   // Draw on canvas2
-  ctx2.clearRect(0, 0, h * 2, h * 2);
+  ctx2.clearRect(0, 0, canvas2.width, canvas2.height);
   ctx2.save();
   ctx2.translate(r, r);
 
