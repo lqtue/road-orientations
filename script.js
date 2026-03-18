@@ -77,7 +77,7 @@ const geocoderApi = {
 };
 
 const geocoder = new MaplibreGeocoder(geocoderApi, { maplibregl: maplibregl, marker: false });
-document.getElementById('map').appendChild(geocoder.onAdd(map));
+document.getElementById('search-wrapper').appendChild(geocoder.onAdd(map));
 
 geocoder.on('result', (e) => {
     pinnedCenter = e.result.center;
@@ -100,17 +100,11 @@ function updateCenterInfo() {
 }
 
 // --- UI Setup ---
-document.getElementById('sidebar-toggle').onclick = () => {
-    document.body.classList.toggle('sidebar-open');
-    document.getElementById('sidebar-toggle').textContent = document.body.classList.contains('sidebar-open') ? '✕' : '☰';
-    setTimeout(() => map.resize(), 350);
-};
-
 document.getElementById('mode-cumulative').onclick = (e) => { analysisMode = 'cumulative'; updateUIButtons(e.target); processAndDrawChart(); };
 document.getElementById('mode-ring-only').onclick = (e) => { analysisMode = 'ring-only'; updateUIButtons(e.target); processAndDrawChart(); };
 
 function updateUIButtons(el) {
-    document.querySelectorAll('.mode-toggle button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.mode-pill').forEach(b => b.classList.remove('active'));
     el.classList.add('active');
     updateMapRings();
 }
