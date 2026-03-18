@@ -360,7 +360,8 @@ async function triggerHybridAnalysis() {
             processAndDrawChart();
             renderBreakdown();
             canvasEl.style.opacity = '1';
-        }, 200);
+            canvasEl.style.transition = '';
+        }, 220);
     } else if (!activeAbortController || !activeAbortController.signal.aborted) {
         updateStatus('fast');
     }
