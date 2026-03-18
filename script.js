@@ -132,12 +132,38 @@ document.getElementById('preset-menu').addEventListener('click', (e) => {
   triggerHybridAnalysis();
 });
 
+async function reverseGeocodePin(lngLat) {
+  const [lng, lat] = lngLat;
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort();
+    document.getElementById('location-name').textContent =
+      `Lat: ${lat.toFixed(4)}, Lng: ${lng.toFixed(4)}`;
+  }, 3000);
+
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&zoom=10&format=json`;
+    const res = await fetch(url, { signal: controller.signal });
+    const data = await res.json();
+    clearTimeout(timer);
+    document.getElementById('location-name').textContent =
+      data.display_name || `Lat: ${lat.toFixed(4)}, Lng: ${lng.toFixed(4)}`;
+  } catch (e) {
+    clearTimeout(timer);
+    if (e.name !== 'AbortError') {
+      document.getElementById('location-name').textContent =
+        `Lat: ${lat.toFixed(4)}, Lng: ${lng.toFixed(4)}`;
+    }
+  }
+}
+
 centerMarker.on('dragend', () => {
-    const lngLat = centerMarker.getLngLat();
-    pinnedCenter = [lngLat.lng, lngLat.lat];
-    updateCenterInfo();
-    updateMapRings();
-    triggerHybridAnalysis();
+  const lngLat = centerMarker.getLngLat();
+  pinnedCenter = [lngLat.lng, lngLat.lat];
+  updateCenterInfo();
+  updateMapRings();
+  triggerHybridAnalysis();
+  reverseGeocodePin(pinnedCenter);
 });
 
 function updateCenterInfo() {
