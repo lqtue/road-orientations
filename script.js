@@ -275,6 +275,9 @@ function updateStatus(state) {
       line2.textContent = `${lastSegmentCount.toLocaleString()} segments · ${maxR} km radius · ${today}`;
     }
   }
+  if (state === 'timeout') {
+    el.textContent = 'TIMEOUT';
+  }
 }
 
 // --- Hybrid Data Engine ---
@@ -335,8 +338,12 @@ async function fetchOverpassSegments(centerCoords, maxRadiusKm) {
         dataCache[cacheKey] = segments;
         return segments;
     } catch (error) {
-        if (error.name === 'AbortError') console.log('Previous fetch cancelled');
-        else console.error("Overpass fetch failed:", error);
+        if (error.name === 'AbortError') {
+            console.log('Previous fetch cancelled');
+        } else {
+            updateStatus('timeout');
+            document.getElementById('retry-btn').hidden = false;
+        }
         return null;
     }
 }
@@ -405,7 +412,13 @@ function processAndDrawChart() {
     [['N', 0, -labelOffset], ['S', 0, labelOffset], ['E', labelOffset, 0], ['W', -labelOffset, 0]]
       .forEach(([label, x, y]) => ctx.fillText(label, x, y));
 
-    if (!currentSegments || currentSegments.length === 0) { ctx.restore(); return; }
+    const noDataMsg = document.getElementById('no-data-msg');
+    if (!currentSegments || currentSegments.length === 0) {
+      if (noDataMsg) noDataMsg.hidden = false;
+      ctx.restore();
+      return;
+    }
+    if (noDataMsg) noDataMsg.hidden = true;
 
     const ruler = new CheapRuler(pinnedCenter[1]);
     const stackedBins = Array.from({ length: radii.length }, () => new Float64Array(numBins));
@@ -609,6 +622,11 @@ function updateHash() {
     explainerOpen,
   });
 }
+
+document.getElementById('retry-btn').addEventListener('click', () => {
+  document.getElementById('retry-btn').hidden = true;
+  triggerHybridAnalysis();
+});
 
 // --- Event Listeners ---
 map.on('load', () => {
