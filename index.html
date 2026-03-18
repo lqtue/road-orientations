@@ -47,9 +47,18 @@
                 <div id="road-type-list" style="display:none"></div>
             </div>
 
+            <details class="info-panel">
+                <summary>How to read</summary>
+                <p>Each petal = a compass bearing. Longer = more road length that way. Both modes are <strong>cumulative</strong>: each ring includes all roads from the center outward. <strong>Radii</strong>: colors are distance bands. <strong>Detail</strong>: colors are road types — toggle above. Hover chart for values; hover a map ring to isolate that band.</p>
+            </details>
+
             <div class="sidebar-section last">
                 <h4>Center</h4>
                 <div id="center-info" class="coord-text"></div>
+            </div>
+
+            <div class="sidebar-section last">
+                <button id="export-csv-btn">Export CSV</button>
             </div>
 
         </div>
@@ -84,15 +93,10 @@
 
     <div id="chart-area">
         <div id="chart-column">
-            <details id="chart-legend">
-                <summary>How to read</summary>
-                <p>Each petal = a compass bearing. Longer = more road length that way. Both modes are <strong>cumulative</strong>: each ring includes all roads from the center outward. <strong>Radii</strong>: colors are distance bands. <strong>Detail</strong>: colors are road types — toggle in sidebar. Hover chart for values; hover a map ring to isolate that band.</p>
-            </details>
             <div id="canvas-container">
                 <canvas id="canvas"></canvas>
                 <div id="data-status" class="fast">FAST (MAP VIEW)</div>
             </div>
-            <button id="export-csv-btn">Export CSV</button>
         </div>
     </div>
 
