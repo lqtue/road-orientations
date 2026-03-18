@@ -121,6 +121,7 @@ function jumpToSearchResult(item) {
     map.flyTo({ center: pinnedCenter, zoom: 12 });
     searchInput.value = item.display_name.split(',')[0];
     searchResultsEl.style.display = 'none';
+    localStorage.setItem('lastCity', JSON.stringify({ name: searchInput.value, lon: pinnedCenter[0], lat: pinnedCenter[1] }));
     updateCenterInfo();
     updateMapRings();
     triggerHybridAnalysis();
@@ -279,10 +280,14 @@ function renderRoadTypeUI() {
 function updateStatus(state) {
     const el = document.getElementById('data-status');
     el.className = state;
-    if (state === 'fast') el.innerText = "FAST (MAP VIEW)";
-    if (state === 'fetching') el.innerText = "FETCHING PRECISE DATA...";
-    if (state === 'precise') el.innerText = "PRECISE (OVERPASS)";
-    if (state === 'error') el.innerText = "OVERPASS UNAVAILABLE — SHOWING MAP DATA";
+    if (state === 'fast') { el.innerText = "FAST (MAP VIEW)"; el.onclick = null; el.style.cursor = ''; }
+    if (state === 'fetching') { el.innerText = "FETCHING PRECISE DATA..."; el.onclick = null; el.style.cursor = ''; }
+    if (state === 'precise') { el.innerText = "PRECISE (OVERPASS)"; el.onclick = null; el.style.cursor = ''; }
+    if (state === 'error') {
+        el.innerText = "OVERPASS UNAVAILABLE — CLICK TO RETRY";
+        el.style.cursor = 'pointer';
+        el.onclick = () => { el.onclick = null; triggerHybridAnalysis(); };
+    }
 }
 
 // --- Hybrid Data Engine ---
@@ -632,18 +637,27 @@ map.on('load', async () => {
     updateCenterInfo(); renderRadiiUI(); renderRoadTypeUI(); updateMapRings();
     setTimeout(() => { triggerHybridAnalysis(); }, 400);
 
-    // Geocode HCMC in background and update center when ready
-    try {
-        const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent('Ho Chi Minh City, Vietnam')}&format=json&limit=1`);
-        const data = await res.json();
-        if (data.length > 0) {
-            pinnedCenter = [parseFloat(data[0].lon), parseFloat(data[0].lat)];
-            centerMarker.setLngLat(pinnedCenter);
-            map.setCenter(pinnedCenter);
-            searchInput.value = 'Ho Chi Minh City';
-            updateCenterInfo(); updateMapRings();
-        }
-    } catch(e) { console.error('Initial geocode failed', e); }
+    // Restore last city from localStorage, or fall back to HCMC
+    const saved = (() => { try { return JSON.parse(localStorage.getItem('lastCity')); } catch { return null; } })();
+    if (saved) {
+        pinnedCenter = [saved.lon, saved.lat];
+        centerMarker.setLngLat(pinnedCenter);
+        map.setCenter(pinnedCenter);
+        searchInput.value = saved.name;
+        updateCenterInfo(); updateMapRings(); triggerHybridAnalysis();
+    } else {
+        try {
+            const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent('Ho Chi Minh City, Vietnam')}&format=json&limit=1`);
+            const data = await res.json();
+            if (data.length > 0) {
+                pinnedCenter = [parseFloat(data[0].lon), parseFloat(data[0].lat)];
+                centerMarker.setLngLat(pinnedCenter);
+                map.setCenter(pinnedCenter);
+                searchInput.value = 'Ho Chi Minh City';
+                updateCenterInfo(); updateMapRings();
+            }
+        } catch(e) { console.error('Initial geocode failed', e); }
+    }
     
     map.on('mousemove', 'analysis-rings-fill', (e) => {
         if (e.features.length > 0) {
