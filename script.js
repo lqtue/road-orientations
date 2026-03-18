@@ -351,10 +351,16 @@ async function triggerHybridAnalysis() {
     const preciseSegments = await fetchOverpassSegments(pinnedCenter, fetchRadius);
 
     if (preciseSegments) {
-        currentSegments = preciseSegments;
-        updateStatus('precise');
-        processAndDrawChart();
-        renderBreakdown();
+        const canvasEl = document.getElementById('canvas');
+        canvasEl.style.transition = 'opacity 0.2s';
+        canvasEl.style.opacity = '0';
+        setTimeout(() => {
+            currentSegments = preciseSegments;
+            updateStatus('precise');
+            processAndDrawChart();
+            renderBreakdown();
+            canvasEl.style.opacity = '1';
+        }, 200);
     } else if (!activeAbortController || !activeAbortController.signal.aborted) {
         updateStatus('fast');
     }
