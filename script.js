@@ -527,36 +527,43 @@ function processAndDrawChart() {
             ctx.beginPath(); ctx.arc(0, 0, r * Math.sqrt(g / 4), 0, 2 * Math.PI, false); ctx.stroke();
         }
 
-        // Draw back-to-front by type; within each type, outer rings first, inner on top
-        ['path', 'service', 'local', 'arterial', 'major'].forEach(key => {
-            const g = roadTypeGroups.find(g => g.key === key);
-            if (!g || !activeTypeGroups.has(key) || !normTypeBins[key]) return;
+        // Draw stacked type rose: each bin is a single bar with type segments stacked outward
+        const stackOrder = ['major', 'arterial', 'local', 'service', 'path'];
 
-            function drawRing(ring, alpha) {
-                const norm = normTypeBins[key][ring];
-                ctx.fillStyle = g.color; ctx.globalAlpha = alpha;
-                ctx.beginPath(); ctx.moveTo(0, 0);
-                for (let b = 0; b < numBins; b++) {
-                    const a0 = ((b - 0.5) * 360 / numBins - 90) * Math.PI / 180;
-                    const a1 = ((b + 0.5) * 360 / numBins - 90) * Math.PI / 180;
-                    const pct = norm[b];
-                    if (pct > 0) { ctx.arc(0, 0, r * Math.sqrt(pct / maxPercentage), a0, a1, false); ctx.lineTo(0, 0); }
+        function drawStackedBins(ring, alpha) {
+            for (let b = 0; b < numBins; b++) {
+                const a0 = ((b - 0.5) * 360 / numBins - 90) * Math.PI / 180;
+                const a1 = ((b + 0.5) * 360 / numBins - 90) * Math.PI / 180;
+                let cumulative = 0;
+                for (const key of stackOrder) {
+                    const g = roadTypeGroups.find(g => g.key === key);
+                    if (!g || !activeTypeGroups.has(key) || !normTypeBins[key]) continue;
+                    const pct = normTypeBins[key][ring][b];
+                    if (pct <= 0) continue;
+                    const innerR = cumulative > 0 ? r * Math.sqrt(cumulative / maxPercentage) : 0;
+                    const outerR = r * Math.sqrt((cumulative + pct) / maxPercentage);
+                    ctx.globalAlpha = alpha;
+                    ctx.fillStyle = g.color;
+                    ctx.beginPath();
+                    ctx.arc(0, 0, outerR, a0, a1);
+                    ctx.arc(0, 0, innerR, a1, a0, true);
+                    ctx.closePath();
+                    ctx.fill();
+                    cumulative += pct;
                 }
-                ctx.fill();
-                ctx.globalAlpha = Math.min(alpha + 0.15, 1.0); ctx.strokeStyle = g.color; ctx.lineWidth = 0.7; ctx.stroke();
             }
+        }
 
-            if (hoveredRingIndex === -1) {
-                for (let ring = radii.length - 1; ring >= 0; ring--) {
-                    const t = radii.length === 1 ? 1 : (radii.length - 1 - ring) / (radii.length - 1);
-                    drawRing(ring, 0.35 + t * 0.3);
-                }
-            } else {
-                for (let ring = radii.length - 1; ring >= 0; ring--)
-                    if (ring !== hoveredRingIndex) drawRing(ring, 0.08);
-                drawRing(hoveredRingIndex, 0.75);
+        if (hoveredRingIndex === -1) {
+            for (let ring = radii.length - 1; ring >= 0; ring--) {
+                const t = radii.length === 1 ? 1 : (radii.length - 1 - ring) / (radii.length - 1);
+                drawStackedBins(ring, 0.5 + t * 0.35);
             }
-        });
+        } else {
+            for (let ring = radii.length - 1; ring >= 0; ring--)
+                if (ring !== hoveredRingIndex) drawStackedBins(ring, 0.1);
+            drawStackedBins(hoveredRingIndex, 0.85);
+        }
     }
 
     ctx.globalAlpha = 1.0; ctx.restore();
