@@ -716,6 +716,10 @@ canvasContainer.addEventListener('mouseleave', () => {
 });
 
 function exportPNG() {
+  if (!globalNormalizedBins || globalNormalizedBins.length === 0) {
+    alert('No data to export yet — search for a city first.');
+    return;
+  }
   const DPR = 2;
   const W = 600 * DPR, H = 300 * DPR;
   const off = document.createElement('canvas');
@@ -784,9 +788,10 @@ function exportPNG() {
   ctx2.fillText(document.getElementById('data-source-line2').textContent || '', tx, H - 15 * DPR);
 
   off.toBlob((blob) => {
+    if (!blob) { alert('Export failed — canvas may be tainted by cross-origin tiles.'); return; }
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `road-orientations-${cityName.replace(/[^a-z0-9]/gi, '-').toLowerCase()}.png`;
+    a.download = `road-orientations-${cityName.replace(/[^a-z0-9]/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase()}.png`;
     a.click();
     URL.revokeObjectURL(a.href);
   }, 'image/png');
