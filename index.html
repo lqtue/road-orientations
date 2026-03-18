@@ -20,49 +20,149 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 </head>
 
-<body class="sidebar-open">
+<body>
 
-    <button id="sidebar-toggle">✕</button>
-
-    <div id="sidebar">
-        <div class="sidebar-content">
-            <div class="sidebar-section">
-                <h3>Road Orientations</h3>
-                <p>Hybrid Mode: Fast approximations via vector tiles, upgraded automatically via Overpass.</p>
-                <p style="font-size: 0.78rem;">Use the search bar on the map or drag the pin to analyze a new area.</p>
-            </div>
-
-            <div class="sidebar-section">
-                <h4>Analysis Mode</h4>
-                <div class="mode-toggle">
-                    <button id="mode-cumulative" class="active">Cumulative</button>
-                    <button id="mode-ring-only">Ring Only</button>
-                </div>
-            </div>
-
-            <div class="sidebar-section">
-                <h4>Distance Radii (km)</h4>
-                <div id="radii-list"></div>
-                <button id="add-radius-btn" class="add-btn">+ Add Ring</button>
-            </div>
-
-            <div class="sidebar-section">
-                <h4>Center Coordinates</h4>
-                <div id="center-info" class="coord-text"></div>
-            </div>
-        </div>
+  <!-- Top bar -->
+  <div id="topbar">
+    <div id="logo">Road<span>.</span>Orient</div>
+    <div id="search-wrapper"><!-- geocoder mounts here --></div>
+    <div id="topbar-center">
+      <div class="mode-pills">
+        <button id="mode-cumulative" class="mode-pill active">Cumulative</button>
+        <button id="mode-ring-only" class="mode-pill">Ring Only</button>
+      </div>
+      <div class="preset-dropdown-wrap">
+        <button id="preset-trigger">Try an example ▾</button>
+        <ul id="preset-menu" hidden>
+          <li data-city="manhattan">Manhattan</li>
+          <li data-city="paris">Paris</li>
+          <li data-city="barcelona">Barcelona</li>
+          <li data-city="tokyo">Tokyo</li>
+          <li data-city="hcmc">HCMC</li>
+        </ul>
+      </div>
     </div>
+    <button id="compare-btn" class="compare-btn">⚖ Compare</button>
+  </div>
 
+  <!-- Main two-column layout -->
+  <div id="main">
+
+    <!-- Left: map -->
     <div id="map"></div>
 
-    <div id="canvas-container">
-        <canvas id="canvas"></canvas>
-        <div id="data-status" class="fast">FAST (MAP VIEW)</div>
-    </div>
+    <!-- Right: analysis panel -->
+    <div id="panel">
 
-    <div id="chart-tooltip"></div>
+      <!-- Section 1: Explainer -->
+      <div class="panel-section" id="explainer-section">
+        <details id="explainer" open>
+          <summary>ℹ︎ How to read this chart</summary>
+          <div class="explainer-body">
+            <!-- SVG added in Task 6 -->
+            <p>Each petal shows how much total road length faces that compass direction. Longer petal = more roads oriented that way. Hover for exact percentages.</p>
+          </div>
+        </details>
+      </div>
 
-    <script src="script.js"></script>
+      <!-- Section 2: Location header -->
+      <div class="panel-section" id="location-section">
+        <div id="location-name">—</div>
+        <span id="data-status" class="badge fast">FAST</span>
+        <div id="center-info" class="coord-text"></div>
+      </div>
+
+      <!-- Section 3: Rose diagram + dominant direction -->
+      <div class="panel-section" id="chart-section">
+        <div id="chart-row">
+          <div id="canvas-container">
+            <canvas id="canvas"></canvas>
+          </div>
+          <div id="dominant-block">
+            <div id="dominant-card">
+              <div class="dom-label">Dominant</div>
+              <div id="dominant-value">—</div>
+              <div id="secondary-value"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 4: Ring breakdown -->
+      <div class="panel-section" id="breakdown-section">
+        <div class="section-label">Ring Breakdown</div>
+        <div id="breakdown-list"></div>
+        <button id="breakdown-toggle" hidden>Show all ↓</button>
+      </div>
+
+      <!-- Section 5: Ring controls -->
+      <div class="panel-section" id="rings-section">
+        <div class="section-label">Analysis Rings (km)</div>
+        <div id="radii-list"></div>
+        <button id="add-radius-btn" class="add-btn">+ Add Ring</button>
+      </div>
+
+      <!-- Section 6: Data source -->
+      <div class="panel-section" id="source-section">
+        <div id="data-source-line1" class="data-source">Source: OpenStreetMap contributors via Overpass API</div>
+        <div id="data-source-line2" class="data-source"></div>
+      </div>
+
+      <!-- Section 7: Actions -->
+      <div class="panel-section" id="actions-section">
+        <div class="actions">
+          <button id="export-btn" class="btn btn-export">⬇ Export</button>
+          <button id="share-btn" class="btn btn-share">🔗 Share</button>
+          <button id="compare-btn-panel" class="btn btn-compare">⚖ Compare</button>
+        </div>
+        <div id="share-fallback" hidden>
+          <input id="share-url-input" type="text" readonly>
+        </div>
+      </div>
+
+    </div><!-- /#panel -->
+
+    <!-- Comparison panel (initially hidden) -->
+    <div id="panel-compare" hidden>
+      <div class="compare-vs">vs</div>
+      <button id="compare-close">×</button>
+
+      <div class="panel-section">
+        <div id="location-name-2">—</div>
+        <span id="data-status-2" class="badge fast">FAST</span>
+        <div id="center-info-2" class="coord-text"></div>
+      </div>
+
+      <div class="panel-section" id="chart-section-2">
+        <div id="chart-row-2">
+          <div id="canvas-container-2">
+            <canvas id="canvas-2"></canvas>
+          </div>
+          <div id="dominant-block-2">
+            <div id="dominant-card-2">
+              <div class="dom-label">Dominant</div>
+              <div id="dominant-value-2">—</div>
+              <div id="secondary-value-2"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-section">
+        <div id="search-wrapper-2"></div>
+      </div>
+
+      <div class="panel-section">
+        <div class="data-source">Source: OpenStreetMap via Overpass API</div>
+        <div id="data-source-line2-2" class="data-source"></div>
+      </div>
+    </div><!-- /#panel-compare -->
+
+  </div><!-- /#main -->
+
+  <div id="chart-tooltip"></div>
+
+  <script src="script.js"></script>
 </body>
 
 </html>
