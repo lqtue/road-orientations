@@ -348,6 +348,25 @@ function processAndDrawChart() {
         ctx.globalAlpha = isHovered ? 1.0 : 0.2; ctx.strokeStyle = getRingColor(ring); ctx.lineWidth = 1.0; ctx.stroke();
     }
     ctx.globalAlpha = 1.0; ctx.restore();
+
+    // Update dominant direction panel
+    const outerBins = globalNormalizedBins[radii.length - 1];
+    const { dominant, secondary } = computeDominantDirections(outerBins);
+    const domEl = document.getElementById('dominant-value');
+    const secEl = document.getElementById('secondary-value');
+    if (domEl) {
+      if (dominant) {
+        const label = `${binToCompassLabel(dominant.bins[0])} – ${binToCompassLabel(dominant.bins[1])}`;
+        domEl.textContent = `${label} · ${dominant.combined.toFixed(1)}%`;
+      } else {
+        domEl.textContent = '—';
+      }
+    }
+    if (secEl) {
+      secEl.textContent = secondary
+        ? `Secondary: ${binToCompassLabel(secondary.bins[0])}–${binToCompassLabel(secondary.bins[1])}`
+        : '';
+    }
 }
 
 // --- Map Ring Geometries ---
@@ -383,6 +402,24 @@ function getCompassDirection(degrees) {
     const dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
     const index = Math.round(((degrees %= 360) < 0 ? degrees + 360 : degrees) / 22.5) % 16;
     return dirs[index];
+}
+
+function computeDominantDirections(bins, numBins = 64) {
+  const half = numBins / 2;
+  const pairs = [];
+  for (let k = 0; k < half; k++) {
+    pairs.push({ bins: [k, k + half], combined: bins[k] + bins[k + half] });
+  }
+  pairs.sort((a, b) => b.combined - a.combined);
+  const dominant = pairs[0].combined > 0 ? pairs[0] : null;
+  const secondary = pairs[1] && pairs[1].combined > 0 ? pairs[1] : null;
+  return { dominant, secondary };
+}
+
+function binToCompassLabel(binIndex, numBins = 64) {
+  const deg = (binIndex / numBins) * 360;
+  const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+  return dirs[Math.round(deg / 22.5) % 16];
 }
 
 function hideTooltip() {
