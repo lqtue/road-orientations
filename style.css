@@ -111,6 +111,13 @@ input[type="number"] { width: 55px; padding: 5px 6px; border: 1px solid #cbd5e1;
 #chart-column {
     position: relative; width: fit-content;
 }
+#export-csv-btn {
+    width: 100%; margin-top: 6px; padding: 6px 0;
+    background: none; border: 1px solid var(--border-color); border-radius: var(--radius-md);
+    color: var(--text-secondary); font-size: 0.72rem; font-weight: 600; letter-spacing: 0.05em;
+    text-transform: uppercase; cursor: pointer; transition: border-color 0.15s, color 0.15s;
+}
+#export-csv-btn:hover { border-color: #3b82f6; color: #3b82f6; }
 
 /* How to read — floats above canvas, doesn't affect layout */
 #chart-legend {

@@ -732,3 +732,42 @@ canvasContainer.addEventListener('mouseleave', () => {
     }
     hideTooltip();
 });
+
+// --- CSV Export ---
+function exportCSV() {
+    const cityName = document.getElementById('search-input').value.trim() || 'unknown';
+    const rows = [];
+
+    if (colorMode === 'radii') {
+        if (!globalNormalizedBins.length) return;
+        const headers = ['bearing_deg', 'compass', ...radii.map(r => `pct_within_${r}km`)];
+        rows.push(headers);
+        for (let b = 0; b < numBins; b++) {
+            const deg = Math.round(b * 360 / numBins);
+            const compass = getCompassDirection(deg);
+            const vals = radii.map((_, ring) => (globalNormalizedBins[ring]?.[b] ?? 0).toFixed(4));
+            rows.push([deg, compass, ...vals]);
+        }
+    } else {
+        if (!Object.keys(globalTypeNorms).length) return;
+        const activeKeys = roadTypeGroups.filter(g => activeTypeGroups.has(g.key) && globalTypeNorms[g.key]);
+        const headers = ['bearing_deg', 'compass', ...activeKeys.map(g => `pct_${g.key}`)];
+        rows.push(headers);
+        for (let b = 0; b < numBins; b++) {
+            const deg = Math.round(b * 360 / numBins);
+            const compass = getCompassDirection(deg);
+            const vals = activeKeys.map(g => (globalTypeNorms[g.key]?.[b] ?? 0).toFixed(4));
+            rows.push([deg, compass, ...vals]);
+        }
+    }
+
+    const csv = rows.map(r => r.join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `road-orientations_${cityName.replace(/\s+/g, '-').toLowerCase()}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+}
+
+document.getElementById('export-csv-btn').onclick = exportCSV;
