@@ -1,0 +1,463 @@
+// --- Cohen-Sutherland Line Clipping (For local vector data) ---
+function lineclip(points, bbox, result) {
+    var len = points.length, codeA = bitCode(points[0], bbox), part = [], i, a, b, codeB, lastCode;
+    if (!result) result = [];
+    for (i = 1; i < len; i++) {
+        a = points[i - 1]; b = points[i]; codeB = lastCode = bitCode(b, bbox);
+        while (true) {
+            if (!(codeA | codeB)) { part.push(a); if (codeB !== lastCode) { part.push(b); if (i < len - 1) { result.push(part); part = []; } } else if (i === len - 1) { part.push(b); } break; }
+            else if (codeA & codeB) { break; }
+            else if (codeA) { a = intersect(a, b, codeA, bbox); codeA = bitCode(a, bbox); }
+            else { b = intersect(a, b, codeB, bbox); codeB = bitCode(b, bbox); }
+        }
+        codeA = lastCode;
+    }
+    if (part.length) result.push(part);
+    return result;
+}
+function intersect(a, b, edge, bbox) {
+    return edge & 8 ? [a[0] + (b[0] - a[0]) * (bbox[3] - a[1]) / (b[1] - a[1]), bbox[3]] : edge & 4 ? [a[0] + (b[0] - a[0]) * (bbox[1] - a[1]) / (b[1] - a[1]), bbox[1]] : edge & 2 ? [bbox[2], a[1] + (b[1] - a[1]) * (bbox[2] - a[0]) / (b[0] - a[0])] : edge & 1 ? [bbox[0], a[1] + (b[1] - a[1]) * (bbox[0] - a[0]) / (b[0] - a[0])] : null;
+}
+function bitCode(p, bbox) {
+    var code = 0; if (p[0] < bbox[0]) code |= 1; else if (p[0] > bbox[2]) code |= 2; if (p[1] < bbox[1]) code |= 4; else if (p[1] > bbox[3]) code |= 8; return code;
+}
+
+// --- Config ---
+let pinnedCenter = [106.6297, 10.8231]; // Default: HCMC
+const dataCache = {};
+let currentSegments = [];
+let activeAbortController = null;
+
+// Global storage for tooltip math
+let globalNormalizedBins = [];
+
+let radii = [1.0, 3.0, 5.0];
+let hoveredRingIndex = -1;
+let analysisMode = 'cumulative';
+
+const h = 300;
+const r = h / 2;
+const numBins = 64;
+const ringColors = ['rgb(255, 99, 132)', 'rgb(54, 162, 235)', 'rgb(255, 206, 86)', 'rgb(75, 192, 192)', 'rgb(153, 102, 255)'];
+
+// --- Init Map & Geocoder ---
+const map = new maplibregl.Map({
+    container: 'map',
+    style: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+    center: pinnedCenter,
+    zoom: 12
+});
+
+const centerMarker = new maplibregl.Marker({ color: '#1e293b', draggable: true })
+    .setLngLat(pinnedCenter)
+    .addTo(map);
+
+// Nominatim Geocoder Implementation
+const geocoderApi = {
+    forwardGeocode: async (config) => {
+        const features = [];
+        try {
+            const request = `https://nominatim.openstreetmap.org/search?q=${config.query}&format=geojson&polygon_geojson=1&addressdetails=1`;
+            const response = await fetch(request);
+            const geojson = await response.json();
+            for (let feature of geojson.features) {
+                let center = [
+                    feature.bbox[0] + (feature.bbox[2] - feature.bbox[0]) / 2,
+                    feature.bbox[1] + (feature.bbox[3] - feature.bbox[1]) / 2
+                ];
+                features.push({
+                    type: 'Feature', geometry: { type: 'Point', coordinates: center },
+                    place_name: feature.properties.display_name, properties: feature.properties,
+                    text: feature.properties.display_name, place_type: ['place'], center: center
+                });
+            }
+        } catch (e) { console.error("Geocoder failed", e); }
+        return { features: features };
+    }
+};
+
+const geocoder = new MaplibreGeocoder(geocoderApi, { maplibregl: maplibregl, marker: false });
+document.getElementById('map').appendChild(geocoder.onAdd(map));
+
+geocoder.on('result', (e) => {
+    pinnedCenter = e.result.center;
+    centerMarker.setLngLat(pinnedCenter);
+    updateCenterInfo();
+    updateMapRings();
+    triggerHybridAnalysis();
+});
+
+centerMarker.on('dragend', () => {
+    const lngLat = centerMarker.getLngLat();
+    pinnedCenter = [lngLat.lng, lngLat.lat];
+    updateCenterInfo();
+    updateMapRings();
+    triggerHybridAnalysis();
+});
+
+function updateCenterInfo() {
+    document.getElementById('center-info').textContent = `${pinnedCenter[1].toFixed(4)}°N, ${pinnedCenter[0].toFixed(4)}°E`;
+}
+
+// --- UI Setup ---
+document.getElementById('sidebar-toggle').onclick = () => {
+    document.body.classList.toggle('sidebar-open');
+    document.getElementById('sidebar-toggle').textContent = document.body.classList.contains('sidebar-open') ? '✕' : '☰';
+    setTimeout(() => map.resize(), 350);
+};
+
+document.getElementById('mode-cumulative').onclick = (e) => { analysisMode = 'cumulative'; updateUIButtons(e.target); processAndDrawChart(); };
+document.getElementById('mode-ring-only').onclick = (e) => { analysisMode = 'ring-only'; updateUIButtons(e.target); processAndDrawChart(); };
+
+function updateUIButtons(el) {
+    document.querySelectorAll('.mode-toggle button').forEach(b => b.classList.remove('active'));
+    el.classList.add('active');
+    updateMapRings();
+}
+
+function getRingColor(i) { return ringColors[i % ringColors.length]; }
+
+function renderRadiiUI() {
+    const container = document.getElementById('radii-list');
+    container.innerHTML = '';
+    radii.forEach((radius, i) => {
+        const row = document.createElement('div');
+        row.className = 'radius-row';
+        if (hoveredRingIndex === i) {
+            row.style.borderColor = getRingColor(i);
+            row.style.boxShadow = `0 2px 8px ${getRingColor(i).replace('rgb', 'rgba').replace(')', ', 0.2)')}`;
+        }
+        row.innerHTML = `<div class="color-swatch" style="background-color: ${getRingColor(i)}"></div>
+            <input type="number" value="${radius}" step="0.5" min="0.5" data-index="${i}">
+            <span class="unit-label">km</span><button class="remove-btn">×</button>`;
+
+        row.querySelector('input').onchange = (e) => {
+            let val = parseFloat(e.target.value);
+            if (val > 0) { radii[i] = val; radii.sort((a, b) => a - b); renderRadiiUI(); triggerHybridAnalysis(); updateMapRings(); }
+        };
+        row.querySelector('.remove-btn').onclick = () => {
+            if (radii.length > 1) { radii.splice(i, 1); hoveredRingIndex = -1; renderRadiiUI(); triggerHybridAnalysis(); updateMapRings(); }
+        };
+        container.appendChild(row);
+    });
+}
+
+document.getElementById('add-radius-btn').onclick = () => { radii.push(radii[radii.length - 1] + 2.0); renderRadiiUI(); triggerHybridAnalysis(); updateMapRings(); };
+
+function updateStatus(state) {
+    const el = document.getElementById('data-status');
+    el.className = state;
+    if (state === 'fast') el.innerText = "FAST (MAP VIEW)";
+    if (state === 'fetching') el.innerText = "FETCHING PRECISE DATA...";
+    if (state === 'precise') el.innerText = "PRECISE (OVERPASS)";
+}
+
+// --- Hybrid Data Engine ---
+function extractLocalSegments() {
+    const bounds = map.getBounds();
+    const bbox = [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()];
+    const features = map.queryRenderedFeatures().filter(f =>
+        f.geometry && (f.geometry.type === 'LineString' || f.geometry.type === 'MultiLineString') &&
+        f.layer && f.layer['source-layer'] && (f.layer['source-layer'] === 'street' || f.layer['source-layer'] === 'transportation')
+    );
+
+    const segments = [];
+    features.forEach(f => {
+        const isTwoWay = f.properties.oneway !== 'yes' && f.properties.oneway !== 1 && f.properties.oneway !== true;
+        const lines = f.geometry.type === 'LineString' ? [f.geometry.coordinates] : f.geometry.coordinates;
+        lines.forEach(line => {
+            const clipped = lineclip(line, bbox);
+            clipped.forEach(clipLine => {
+                for (let i = 0; i < clipLine.length - 1; i++) {
+                    segments.push({ p1: clipLine[i], p2: clipLine[i + 1], isTwoWay });
+                }
+            });
+        });
+    });
+    return segments;
+}
+
+async function fetchOverpassSegments(centerCoords, maxRadiusKm) {
+    if (activeAbortController) activeAbortController.abort();
+    activeAbortController = new AbortController();
+    const signal = activeAbortController.signal;
+
+    const [lng, lat] = centerCoords;
+    const radiusMeters = maxRadiusKm * 1000;
+    const cacheKey = `${lng},${lat},${maxRadiusKm}`;
+
+    if (dataCache[cacheKey]) return dataCache[cacheKey];
+
+    updateStatus('fetching');
+
+    const query = `[out:json][timeout:25];(way["highway"](around:${radiusMeters},${lat},${lng}););out geom;`;
+    const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
+
+    try {
+        const response = await fetch(url, { signal });
+        const data = await response.json();
+        const segments = [];
+        data.elements.forEach(el => {
+            if (el.type === 'way' && el.geometry) {
+                const coords = el.geometry.map(pt => [pt.lon, pt.lat]);
+                const isTwoWay = !(el.tags && (el.tags.oneway === 'yes' || el.tags.oneway === '1' || el.tags.oneway === '-1'));
+                for (let i = 0; i < coords.length - 1; i++) {
+                    segments.push({ p1: coords[i], p2: coords[i + 1], isTwoWay });
+                }
+            }
+        });
+        dataCache[cacheKey] = segments;
+        return segments;
+    } catch (error) {
+        if (error.name === 'AbortError') console.log('Previous fetch cancelled');
+        else console.error("Overpass fetch failed:", error);
+        return null;
+    }
+}
+
+async function triggerHybridAnalysis() {
+    currentSegments = extractLocalSegments();
+    updateStatus('fast');
+    processAndDrawChart();
+
+    const fetchRadius = radii[radii.length - 1] + 1;
+    const preciseSegments = await fetchOverpassSegments(pinnedCenter, fetchRadius);
+
+    if (preciseSegments) {
+        currentSegments = preciseSegments;
+        updateStatus('precise');
+        processAndDrawChart();
+    } else if (!activeAbortController || !activeAbortController.signal.aborted) {
+        updateStatus('fast');
+    }
+}
+
+// --- Mathematics & Canvas Drawing ---
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+canvas.style.width = canvas.style.height = h + 'px';
+canvas.width = canvas.height = h;
+if (window.devicePixelRatio > 1) { canvas.width = canvas.height = h * 2; ctx.scale(2, 2); }
+
+function processAndDrawChart() {
+    ctx.clearRect(0, 0, h, h);
+
+    const bearing = map.getBearing();
+    ctx.save();
+    ctx.translate(r, r);
+    ctx.rotate(-bearing * Math.PI / 180);
+
+    ctx.strokeStyle = 'rgba(0,0,0,0.1)'; ctx.beginPath();
+    ctx.moveTo(-r, 0); ctx.lineTo(r, 0); ctx.moveTo(0, -r); ctx.lineTo(0, r); ctx.stroke();
+
+    if (!currentSegments || currentSegments.length === 0) { ctx.restore(); return; }
+
+    const ruler = new CheapRuler(pinnedCenter[1]);
+    const stackedBins = Array.from({ length: radii.length }, () => new Float64Array(numBins));
+    const maxRadius = radii[radii.length - 1];
+
+    currentSegments.forEach(seg => {
+        const midPt = [(seg.p1[0] + seg.p2[0]) / 2, (seg.p1[1] + seg.p2[1]) / 2];
+        const distToCenter = ruler.distance(pinnedCenter, midPt);
+        if (distToCenter > maxRadius) return;
+
+        let ringIndex = 0;
+        for (let rIdx = 0; rIdx < radii.length; rIdx++) {
+            if (distToCenter <= radii[rIdx]) { ringIndex = rIdx; break; }
+        }
+
+        const segBearing = ruler.bearing(seg.p1, seg.p2);
+        const distance = ruler.distance(seg.p1, seg.p2);
+        const k0 = Math.round((segBearing + 360) * numBins / 360) % numBins;
+        const k1 = Math.round((segBearing + 180) * numBins / 360) % numBins;
+
+        stackedBins[ringIndex][k0] += distance;
+        if (seg.isTwoWay) stackedBins[ringIndex][k1] += distance;
+    });
+
+    const ringTotals = new Float64Array(radii.length);
+    for (let ring = 0; ring < radii.length; ring++) {
+        for (let b = 0; b < numBins; b++) ringTotals[ring] += stackedBins[ring][b];
+    }
+
+    let maxPercentage = 0;
+    globalNormalizedBins = Array.from({ length: radii.length }, () => new Float64Array(numBins));
+
+    if (analysisMode === 'cumulative') {
+        const cumulativeTotals = new Float64Array(radii.length);
+        for (let ring = 0; ring < radii.length; ring++) {
+            for (let b = 0; b < numBins; b++) {
+                for (let k = 0; k <= ring; k++) cumulativeTotals[ring] += stackedBins[k][b];
+            }
+        }
+        const sharedTotal = cumulativeTotals[radii.length - 1];
+        if (sharedTotal > 0) {
+            for (let ring = 0; ring < radii.length; ring++) {
+                for (let b = 0; b < numBins; b++) {
+                    let cumVal = 0;
+                    for (let k = 0; k <= ring; k++) cumVal += stackedBins[k][b];
+                    const pct = (cumVal / sharedTotal) * 100;
+                    globalNormalizedBins[ring][b] = pct;
+                    if (pct > maxPercentage) maxPercentage = pct;
+                }
+            }
+        }
+    } else {
+        for (let ring = 0; ring < radii.length; ring++) {
+            if (ringTotals[ring] === 0) continue;
+            for (let b = 0; b < numBins; b++) {
+                const pct = (stackedBins[ring][b] / ringTotals[ring]) * 100;
+                globalNormalizedBins[ring][b] = pct;
+                if (pct > maxPercentage) maxPercentage = pct;
+            }
+        }
+    }
+
+    if (maxPercentage === 0) { ctx.restore(); return; }
+
+    ctx.strokeStyle = 'rgba(0,0,0,0.08)'; ctx.lineWidth = 0.5;
+    for (let g = 1; g <= 4; g++) {
+        ctx.beginPath(); ctx.arc(0, 0, r * Math.sqrt(g / 4), 0, 2 * Math.PI, false); ctx.stroke();
+    }
+
+    const ringsToDraw = [];
+    for (let i = radii.length - 1; i >= 0; i--) if (i !== hoveredRingIndex) ringsToDraw.push(i);
+    if (hoveredRingIndex !== -1 && hoveredRingIndex < radii.length) ringsToDraw.push(hoveredRingIndex);
+
+    for (let rIdx = 0; rIdx < ringsToDraw.length; rIdx++) {
+        const ring = ringsToDraw[rIdx];
+        if (ringTotals[ring] === 0) continue;
+
+        const isHovered = hoveredRingIndex === -1 || hoveredRingIndex === ring;
+        ctx.fillStyle = getRingColor(ring);
+        ctx.globalAlpha = isHovered ? (hoveredRingIndex !== -1 ? 0.85 : 0.6) : 0.1;
+
+        ctx.beginPath(); ctx.moveTo(0, 0);
+        for (let b = 0; b < numBins; b++) {
+            const a0 = ((b - 0.5) * 360 / numBins - 90) * Math.PI / 180;
+            const a1 = ((b + 0.5) * 360 / numBins - 90) * Math.PI / 180;
+            const percentage = globalNormalizedBins[ring][b];
+            if (percentage > 0) {
+                ctx.arc(0, 0, r * Math.sqrt(percentage / maxPercentage), a0, a1, false);
+                ctx.lineTo(0, 0);
+            }
+        }
+        ctx.fill();
+        ctx.globalAlpha = isHovered ? 1.0 : 0.2; ctx.strokeStyle = getRingColor(ring); ctx.lineWidth = 1.0; ctx.stroke();
+    }
+    ctx.globalAlpha = 1.0; ctx.restore();
+}
+
+// --- Map Ring Geometries ---
+function updateMapRings() {
+    if (!map.isStyleLoaded()) return;
+    const features = [];
+    for (let i = radii.length - 1; i >= 0; i--) {
+        const radius = radii[i];
+        const outerCircle = turf.circle(pinnedCenter, radius, { steps: 64, units: 'kilometers' });
+        let coords = [outerCircle.geometry.coordinates[0]];
+        if (analysisMode === 'ring-only' && i > 0) {
+            const innerCircle = turf.circle(pinnedCenter, radii[i - 1], { steps: 64, units: 'kilometers' });
+            coords.push(innerCircle.geometry.coordinates[0].slice().reverse());
+        }
+        features.push(turf.polygon(coords, {
+            ringIndex: i, color: getRingColor(i),
+            fillOpacity: Math.max(0.02, hoveredRingIndex === -1 ? 0.15 : (hoveredRingIndex === i ? 0.3 : 0.05)),
+            lineOpacity: Math.max(0.05, hoveredRingIndex === -1 ? 0.8 : (hoveredRingIndex === i ? 1.0 : 0.1))
+        }));
+    }
+    const geojson = { type: "FeatureCollection", features: features };
+
+    if (map.getSource('analysis-rings')) { map.getSource('analysis-rings').setData(geojson); }
+    else {
+        map.addSource('analysis-rings', { type: 'geojson', data: geojson });
+        map.addLayer({ 'id': 'analysis-rings-fill', 'type': 'fill', 'source': 'analysis-rings', 'paint': { 'fill-color': ['get', 'color'], 'fill-opacity': ['get', 'fillOpacity'] } });
+        map.addLayer({ 'id': 'analysis-rings-line', 'type': 'line', 'source': 'analysis-rings', 'paint': { 'line-color': ['get', 'color'], 'line-width': 2, 'line-opacity': ['get', 'lineOpacity'], 'line-dasharray': [2, 2] } });
+    }
+}
+
+// --- Helpers for Tooltips ---
+function getCompassDirection(degrees) {
+    const dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+    const index = Math.round(((degrees %= 360) < 0 ? degrees + 360 : degrees) / 22.5) % 16;
+    return dirs[index];
+}
+
+function hideTooltip() {
+    document.getElementById('chart-tooltip').style.display = 'none';
+}
+
+// --- Event Listeners ---
+map.on('load', () => {
+    updateCenterInfo(); renderRadiiUI(); updateMapRings();
+    setTimeout(() => { triggerHybridAnalysis(); }, 800);
+
+    map.on('mousemove', 'analysis-rings-fill', (e) => {
+        if (e.features.length > 0) {
+            const idx = e.features[0].properties.ringIndex;
+            if (idx !== hoveredRingIndex) { hoveredRingIndex = idx; map.getCanvas().style.cursor = 'pointer'; renderRadiiUI(); processAndDrawChart(); updateMapRings(); }
+        }
+    });
+    map.on('mouseleave', 'analysis-rings-fill', () => {
+        if (hoveredRingIndex !== -1) { hoveredRingIndex = -1; map.getCanvas().style.cursor = ''; renderRadiiUI(); processAndDrawChart(); updateMapRings(); }
+    });
+});
+
+map.on('moveend', () => {
+    if (document.getElementById('data-status').className === 'fast') {
+        currentSegments = extractLocalSegments();
+        processAndDrawChart();
+    }
+});
+
+// Hover logic for chart + Tooltips
+const canvasContainer = document.getElementById('canvas-container');
+const tooltip = document.getElementById('chart-tooltip');
+
+canvasContainer.addEventListener('mousemove', (e) => {
+    const rect = canvasContainer.getBoundingClientRect();
+    const mx = e.clientX - rect.left - r;
+    const my = e.clientY - rect.top - r;
+    const dist = Math.sqrt(mx * mx + my * my);
+
+    if (dist > r) {
+        if (hoveredRingIndex !== -1) { hoveredRingIndex = -1; renderRadiiUI(); processAndDrawChart(); updateMapRings(); }
+        hideTooltip();
+        return;
+    }
+
+    const bestRing = Math.min(Math.floor((dist / r) * radii.length), radii.length - 1);
+    if (bestRing !== hoveredRingIndex) {
+        hoveredRingIndex = bestRing;
+        renderRadiiUI(); processAndDrawChart(); updateMapRings();
+    }
+
+    if (globalNormalizedBins.length > 0 && hoveredRingIndex !== -1) {
+        let angleDeg = (Math.atan2(my, mx) * 180 / Math.PI) + 90 + map.getBearing();
+        angleDeg = (angleDeg % 360 + 360) % 360;
+        const binIndex = Math.round(angleDeg * numBins / 360) % numBins;
+        const percentage = globalNormalizedBins[hoveredRingIndex][binIndex];
+
+        const compassDir = getCompassDirection(angleDeg);
+        const color = getRingColor(hoveredRingIndex);
+
+        tooltip.style.display = 'block';
+        tooltip.style.left = e.clientX + 'px';
+        tooltip.style.top = e.clientY + 'px';
+        tooltip.innerHTML = `
+            <div style="display:flex; align-items:center;">
+                <span class="tooltip-dot" style="background-color: ${color}"></span>
+                <span style="color: #94a3b8;">${radii[hoveredRingIndex]}km Ring</span>
+            </div>
+            <div class="tooltip-val">${compassDir} (${Math.round(angleDeg)}°)</div>
+            <div style="font-size: 0.85rem; color: #cbd5e1; margin-top: 4px;">
+                ${percentage.toFixed(2)}% of road length
+            </div>
+        `;
+    }
+});
+
+canvasContainer.addEventListener('mouseleave', () => {
+    if (hoveredRingIndex !== -1) { hoveredRingIndex = -1; renderRadiiUI(); processAndDrawChart(); updateMapRings(); }
+    hideTooltip();
+});

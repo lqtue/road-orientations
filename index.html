@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OSM Road Orientations - Hybrid Mode</title>
+
+    <script src="https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.js"></script>
+    <link href="https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.css" rel="stylesheet" />
+
+    <script src="https://unpkg.com/@maplibre/maplibre-gl-geocoder@1.5.0/dist/maplibre-gl-geocoder.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/@maplibre/maplibre-gl-geocoder@1.5.0/dist/maplibre-gl-geocoder.css"
+        type="text/css" />
+
+    <script src="https://unpkg.com/cheap-ruler@3.0.1/cheap-ruler.js"></script>
+    <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+
+<body class="sidebar-open">
+
+    <button id="sidebar-toggle">✕</button>
+
+    <div id="sidebar">
+        <div class="sidebar-content">
+            <div class="sidebar-section">
+                <h3>Road Orientations</h3>
+                <p>Hybrid Mode: Fast approximations via vector tiles, upgraded automatically via Overpass.</p>
+                <p style="font-size: 0.78rem;">Use the search bar on the map or drag the pin to analyze a new area.</p>
+            </div>
+
+            <div class="sidebar-section">
+                <h4>Analysis Mode</h4>
+                <div class="mode-toggle">
+                    <button id="mode-cumulative" class="active">Cumulative</button>
+                    <button id="mode-ring-only">Ring Only</button>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h4>Distance Radii (km)</h4>
+                <div id="radii-list"></div>
+                <button id="add-radius-btn" class="add-btn">+ Add Ring</button>
+            </div>
+
+            <div class="sidebar-section">
+                <h4>Center Coordinates</h4>
+                <div id="center-info" class="coord-text"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <div id="canvas-container">
+        <canvas id="canvas"></canvas>
+        <div id="data-status" class="fast">FAST (MAP VIEW)</div>
+    </div>
+
+    <div id="chart-tooltip"></div>
+
+    <script src="script.js"></script>
+</body>
+
+</html>
