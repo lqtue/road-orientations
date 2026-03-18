@@ -35,7 +35,7 @@ let radii = [1.0, 3.0, 5.0];
 let hoveredRingIndex = -1;
 let analysisMode = 'cumulative';
 
-const h = 300;
+const h = 120;
 const r = h / 2;
 const numBins = 64;
 const ringColors = ['rgb(255, 99, 132)', 'rgb(54, 162, 235)', 'rgb(255, 206, 86)', 'rgb(75, 192, 192)', 'rgb(153, 102, 255)'];
@@ -249,8 +249,28 @@ function processAndDrawChart() {
     ctx.translate(r, r);
     ctx.rotate(-bearing * Math.PI / 180);
 
-    ctx.strokeStyle = 'rgba(0,0,0,0.1)'; ctx.beginPath();
+    // Crosshair
+    ctx.strokeStyle = 'rgba(0,0,0,0.08)'; ctx.lineWidth = 0.5;
+    ctx.beginPath();
     ctx.moveTo(-r, 0); ctx.lineTo(r, 0); ctx.moveTo(0, -r); ctx.lineTo(0, r); ctx.stroke();
+
+    // Scale grid circles at 25%, 50%, 75%, 100% of r
+    ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+    ctx.lineWidth = 0.5;
+    for (let g = 1; g <= 4; g++) {
+      ctx.beginPath();
+      ctx.arc(0, 0, r * (g / 4), 0, 2 * Math.PI);
+      ctx.stroke();
+    }
+
+    // Compass labels
+    const labelOffset = r - 4;
+    ctx.fillStyle = '#64748b';
+    ctx.font = `bold ${Math.round(h * 0.09)}px Inter, system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    [['N', 0, -labelOffset], ['S', 0, labelOffset], ['E', labelOffset, 0], ['W', -labelOffset, 0]]
+      .forEach(([label, x, y]) => ctx.fillText(label, x, y));
 
     if (!currentSegments || currentSegments.length === 0) { ctx.restore(); return; }
 
@@ -316,11 +336,6 @@ function processAndDrawChart() {
     }
 
     if (maxPercentage === 0) { ctx.restore(); return; }
-
-    ctx.strokeStyle = 'rgba(0,0,0,0.08)'; ctx.lineWidth = 0.5;
-    for (let g = 1; g <= 4; g++) {
-        ctx.beginPath(); ctx.arc(0, 0, r * Math.sqrt(g / 4), 0, 2 * Math.PI, false); ctx.stroke();
-    }
 
     const ringsToDraw = [];
     for (let i = radii.length - 1; i >= 0; i--) if (i !== hoveredRingIndex) ringsToDraw.push(i);
