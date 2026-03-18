@@ -751,7 +751,7 @@ function exportPNG() {
   ctx2.fillText(cityName, tx, 50 * DPR);
 
   ctx2.fillStyle = '#15803d';
-  ctx2.font = `${13 * DPR}px Inter, system-ui, sans-serif`;
+  ctx2.font = `${14 * DPR}px Inter, system-ui, sans-serif`;
   ctx2.fillText(dominant, tx, 80 * DPR);
 
   if (secondary) {
@@ -772,14 +772,14 @@ function exportPNG() {
     ctx2.fillStyle = getRingColor(i);
     ctx2.fillRect(tx, yOff - 8 * DPR, 8 * DPR, 8 * DPR);
     ctx2.fillStyle = '#475569';
-    ctx2.font = `${10 * DPR}px Inter, system-ui, sans-serif`;
+    ctx2.font = `${12 * DPR}px Inter, system-ui, sans-serif`;
     ctx2.fillText(label, tx + 12 * DPR, yOff);
     yOff += 18 * DPR;
   });
 
   // Data source
   ctx2.fillStyle = '#94a3b8';
-  ctx2.font = `${9 * DPR}px Inter, system-ui, sans-serif`;
+  ctx2.font = `${10 * DPR}px Inter, system-ui, sans-serif`;
   ctx2.fillText('Source: OpenStreetMap contributors via Overpass API', tx, H - 30 * DPR);
   ctx2.fillText(document.getElementById('data-source-line2').textContent || '', tx, H - 15 * DPR);
 
