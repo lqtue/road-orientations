@@ -580,6 +580,15 @@ map.on('load', () => {
     map.on('mouseleave', 'analysis-rings-fill', () => {
         if (hoveredRingIndex !== -1) { hoveredRingIndex = -1; map.getCanvas().style.cursor = ''; renderRadiiUI(); processAndDrawChart(); renderBreakdown(); updateMapRings(); }
     });
+
+    map.on('click', (e) => {
+      pinnedCenter = [e.lngLat.lng, e.lngLat.lat];
+      centerMarker.setLngLat(pinnedCenter);
+      updateCenterInfo();
+      updateMapRings();
+      triggerHybridAnalysis();
+      reverseGeocodePin(pinnedCenter);
+    });
 });
 
 map.on('moveend', () => {
