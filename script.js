@@ -24,9 +24,42 @@ function bitCode(p, bbox) {
 
 // --- Config ---
 let pinnedCenter = [106.6297, 10.8231]; // Default: HCMC
-const dataCache = {}; 
-let currentSegments = []; 
+const dataCache = {};
+let currentSegments = [];
 let activeAbortController = null;
+
+// --- Population ---
+const popCache = {}; // key: "lat,lng,radius" → people count
+let ringPopulations = {}; // key: radius → people count (current center)
+
+function formatPop(n) {
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return Math.round(n / 1e3) + 'K';
+    return String(n);
+}
+
+async function fetchRingPopulations() {
+    ringPopulations = {};
+    renderRadiiUI();
+    const lat = pinnedCenter[1].toFixed(4);
+    const lng = pinnedCenter[0].toFixed(4);
+    const snapshot = [...radii]; // capture in case radii change mid-fetch
+    for (const radius of snapshot) {
+        const key = `${lat},${lng},${radius}`;
+        if (popCache[key] !== undefined) {
+            ringPopulations[radius] = popCache[key];
+            renderRadiiUI();
+            continue;
+        }
+        try {
+            const res = await fetch(`https://ringpopulationsapi.azurewebsites.net/api/globalringpopulations?latitude=${lat}&longitude=${lng}&distance_km=${radius}`);
+            const data = await res.json();
+            popCache[key] = data.people;
+            ringPopulations[radius] = data.people;
+            renderRadiiUI();
+        } catch(e) { console.error('Population fetch failed', e); }
+    }
+}
 
 // Global storage for tooltip math
 let globalNormalizedBins = []; // radii mode: indexed by ring
@@ -243,9 +276,13 @@ function renderRadiiUI() {
             row.style.borderColor = getRingColor(i);
             row.style.boxShadow = `0 2px 8px ${getRingColor(i).replace('rgb', 'rgba').replace(')', ', 0.2)')}`;
         }
+        const popVal = ringPopulations[radius];
+        const popText = popVal !== undefined ? formatPop(popVal) : '…';
         row.innerHTML = `<div class="color-swatch" style="background-color: ${getRingColor(i)}"></div>
             <input type="number" value="${radius}" step="0.5" min="0.5" data-index="${i}">
-            <span class="unit-label">km</span><button class="remove-btn">×</button>`;
+            <span class="unit-label">km</span>
+            <span class="ring-pop">${popText}</span>
+            <button class="remove-btn">×</button>`;
         
         row.querySelector('input').onchange = (e) => {
             let val = parseFloat(e.target.value);
@@ -359,10 +396,11 @@ async function triggerHybridAnalysis() {
     currentSegments = extractLocalSegments();
     updateStatus('fast');
     processAndDrawChart();
+    fetchRingPopulations();
 
-    const fetchRadius = radii[radii.length - 1] + 1; 
+    const fetchRadius = radii[radii.length - 1] + 1;
     const preciseSegments = await fetchOverpassSegments(pinnedCenter, fetchRadius);
-    
+
     if (preciseSegments) {
         currentSegments = preciseSegments;
         updateStatus('precise');

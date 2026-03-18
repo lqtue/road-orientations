@@ -57,7 +57,8 @@ h4 { margin: 0 0 10px 0; font-size: 0.75rem; text-transform: uppercase; letter-s
 .radius-row { display: flex; align-items: center; padding: 7px 10px; border-radius: var(--radius-md); background: white; border: 1px solid var(--border-color); }
 .color-swatch { width: 12px; height: 12px; border-radius: 50%; margin-right: 10px; flex-shrink: 0; }
 input[type="number"] { width: 55px; padding: 5px 6px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.85rem; outline: none; margin-right: 6px; }
-.unit-label { font-size: 0.8rem; color: var(--text-secondary); margin-right: auto; }
+.unit-label { font-size: 0.8rem; color: var(--text-secondary); }
+.ring-pop { font-size: 0.72rem; color: var(--text-secondary); margin-left: 6px; margin-right: auto; opacity: 0.7; }
 .remove-btn { color: #ef4444; opacity: 0.4; padding: 2px 6px; border: none; background: none; cursor: pointer; font-weight: bold; }
 .remove-btn:hover { opacity: 1; }
 .add-btn { width: 100%; padding: 8px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: var(--radius-md); color: #3b82f6; cursor: pointer; font-size: 0.85rem; }
