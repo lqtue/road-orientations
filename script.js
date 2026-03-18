@@ -715,6 +715,85 @@ canvasContainer.addEventListener('mouseleave', () => {
   hideTooltip();
 });
 
+function exportPNG() {
+  const DPR = 2;
+  const W = 600 * DPR, H = 300 * DPR;
+  const off = document.createElement('canvas');
+  off.width = W; off.height = H;
+  const ctx2 = off.getContext('2d');
+
+  // Background
+  ctx2.fillStyle = 'white';
+  ctx2.fillRect(0, 0, W, H);
+
+  // Draw rose diagram (copy from existing canvas, scaled to left column)
+  const src = document.getElementById('canvas');
+  const roseSize = 260 * DPR;
+  const rosePad = 20 * DPR;
+  ctx2.drawImage(src, rosePad, (H - roseSize) / 2, roseSize, roseSize);
+
+  // Divider
+  ctx2.strokeStyle = '#f1f5f9';
+  ctx2.lineWidth = 1 * DPR;
+  ctx2.beginPath();
+  ctx2.moveTo(roseSize + rosePad * 2, 20 * DPR);
+  ctx2.lineTo(roseSize + rosePad * 2, H - 20 * DPR);
+  ctx2.stroke();
+
+  // Text column
+  const tx = roseSize + rosePad * 3;
+  const cityName = document.getElementById('location-name').textContent || 'Unknown';
+  const dominant = document.getElementById('dominant-value').textContent || '—';
+  const secondary = document.getElementById('secondary-value').textContent || '';
+
+  ctx2.fillStyle = '#1e293b';
+  ctx2.font = `bold ${18 * DPR}px Inter, system-ui, sans-serif`;
+  ctx2.fillText(cityName, tx, 50 * DPR);
+
+  ctx2.fillStyle = '#15803d';
+  ctx2.font = `${13 * DPR}px Inter, system-ui, sans-serif`;
+  ctx2.fillText(dominant, tx, 80 * DPR);
+
+  if (secondary) {
+    ctx2.fillStyle = '#64748b';
+    ctx2.font = `${11 * DPR}px Inter, system-ui, sans-serif`;
+    ctx2.fillText(secondary, tx, 100 * DPR);
+  }
+
+  // Ring breakdown lines
+  let yOff = 130 * DPR;
+  radii.forEach((radius, i) => {
+    const bins = globalNormalizedBins[i];
+    if (!bins) return;
+    const { dominant: dom } = computeDominantDirections(bins);
+    const label = dom
+      ? `${radius}km: ${binToCompassLabel(dom.bins[0])}–${binToCompassLabel(dom.bins[1])} · ${dom.combined.toFixed(0)}%`
+      : `${radius}km: —`;
+    ctx2.fillStyle = getRingColor(i);
+    ctx2.fillRect(tx, yOff - 8 * DPR, 8 * DPR, 8 * DPR);
+    ctx2.fillStyle = '#475569';
+    ctx2.font = `${10 * DPR}px Inter, system-ui, sans-serif`;
+    ctx2.fillText(label, tx + 12 * DPR, yOff);
+    yOff += 18 * DPR;
+  });
+
+  // Data source
+  ctx2.fillStyle = '#94a3b8';
+  ctx2.font = `${9 * DPR}px Inter, system-ui, sans-serif`;
+  ctx2.fillText('Source: OpenStreetMap contributors via Overpass API', tx, H - 30 * DPR);
+  ctx2.fillText(document.getElementById('data-source-line2').textContent || '', tx, H - 15 * DPR);
+
+  off.toBlob((blob) => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `road-orientations-${cityName.replace(/[^a-z0-9]/gi, '-').toLowerCase()}.png`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }, 'image/png');
+}
+
+document.getElementById('export-btn').addEventListener('click', exportPNG);
+
 document.getElementById('share-btn').addEventListener('click', async () => {
   updateHash();
   const url = window.location.href;
