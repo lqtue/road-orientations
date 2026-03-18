@@ -34,6 +34,7 @@ let globalNormalizedBins = [];
 let radii = [1.0, 3.0, 5.0];
 let hoveredRingIndex = -1;
 let analysisMode = 'cumulative';
+let lastSegmentCount = 0;
 
 const h = 120;
 const r = h / 2;
@@ -195,11 +196,20 @@ function renderBreakdown() {
 }
 
 function updateStatus(state) {
-    const el = document.getElementById('data-status');
-    el.className = state;
-    if (state === 'fast') el.innerText = "FAST (MAP VIEW)";
-    if (state === 'fetching') el.innerText = "FETCHING PRECISE DATA...";
-    if (state === 'precise') el.innerText = "PRECISE (OVERPASS)";
+  const el = document.getElementById('data-status');
+  if (!el) return;
+  el.className = `badge ${state}`;
+  if (state === 'fast') el.innerText = 'FAST';
+  if (state === 'fetching') el.innerText = 'FETCHING…';
+  if (state === 'precise') {
+    el.innerText = 'PRECISE';
+    const line2 = document.getElementById('data-source-line2');
+    if (line2) {
+      const today = new Date().toISOString().slice(0, 10);
+      const maxR = radii[radii.length - 1];
+      line2.textContent = `${lastSegmentCount.toLocaleString()} segments · ${maxR} km radius · ${today}`;
+    }
+  }
 }
 
 // --- Hybrid Data Engine ---
@@ -256,6 +266,7 @@ async function fetchOverpassSegments(centerCoords, maxRadiusKm) {
                 }
             }
         });
+        lastSegmentCount = segments.length;
         dataCache[cacheKey] = segments;
         return segments;
     } catch (error) {
