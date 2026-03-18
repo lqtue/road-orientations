@@ -24,151 +24,114 @@ function bitCode(p, bbox) {
 
 // --- Config ---
 let pinnedCenter = [106.6297, 10.8231]; // Default: HCMC
-const dataCache = {};
-let currentSegments = [];
+const dataCache = {}; 
+let currentSegments = []; 
 let activeAbortController = null;
 
 // Global storage for tooltip math
-let globalNormalizedBins = [];
+let globalNormalizedBins = []; // radii mode: indexed by ring
+let globalTypeNorms = {};      // type mode: keyed by type group
 
 let radii = [1.0, 3.0, 5.0];
 let hoveredRingIndex = -1;
-let analysisMode = 'cumulative';
-let lastSegmentCount = 0;
+let colorMode = 'radii'; // 'radii' | 'type'
 
-
-const h = 120;
-const r = h / 2;
+const h = 300; 
+const r = h / 2; 
 const numBins = 64;
 const ringColors = ['rgb(255, 99, 132)', 'rgb(54, 162, 235)', 'rgb(255, 206, 86)', 'rgb(75, 192, 192)', 'rgb(153, 102, 255)'];
 
-function applyAutoCollapse() {
-  const explainer = document.getElementById('explainer');
-  if (!explainer) return;
-  if (window.innerHeight < 900) {
-    explainer.removeAttribute('open');
-  }
-}
+// --- Road Type Groups ---
+const roadTypeGroups = [
+    { key: 'major',    label: 'Major',    color: 'rgb(220, 38, 38)',   types: new Set(['motorway','motorway_link','trunk','trunk_link','primary','primary_link']) },
+    { key: 'arterial', label: 'Arterial', color: 'rgb(234, 88, 12)',   types: new Set(['secondary','secondary_link','tertiary','tertiary_link']) },
+    { key: 'local',    label: 'Local',    color: 'rgb(59, 130, 246)',  types: new Set(['minor','residential','living_street','unclassified','road']) },
+    { key: 'service',  label: 'Service',  color: 'rgb(100, 116, 139)', types: new Set(['service','track']) },
+    { key: 'path',     label: 'Path',     color: 'rgb(22, 163, 74)',   types: new Set(['path','cycleway','footway','pedestrian','steps','bridleway']) },
+];
+let activeTypeGroups = new Set(roadTypeGroups.map(g => g.key));
 
-// --- Init Map & Geocoder ---
+// --- Init Map ---
 const map = new maplibregl.Map({
     container: 'map',
     style: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
     center: pinnedCenter,
-    zoom: 12
+    zoom: 12,
+    attributionControl: false
 });
+// attribution handled by custom #map-attribution element
 
 const centerMarker = new maplibregl.Marker({ color: '#1e293b', draggable: true })
     .setLngLat(pinnedCenter)
     .addTo(map);
 
-// Nominatim Geocoder Implementation
-const geocoderApi = {
-    forwardGeocode: async (config) => {
-        const features = [];
-        try {
-            const request = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(config.query)}&format=geojson&polygon_geojson=1&addressdetails=1`;
-            const response = await fetch(request);
-            const geojson = await response.json();
-            for (let feature of geojson.features) {
-                let center = [
-                    parseFloat(feature.properties.lon),
-                    parseFloat(feature.properties.lat)
-                ];
-                features.push({
-                    type: 'Feature', geometry: { type: 'Point', coordinates: center },
-                    place_name: feature.properties.display_name, properties: feature.properties,
-                    text: feature.properties.display_name, place_type: ['place'], center: center
-                });
-            }
-        } catch (e) { console.error("Geocoder failed", e); }
-        return { features: features };
-    }
-};
+// --- Custom Search ---
+let searchDebounce = null;
+const searchInput = document.getElementById('search-input');
+const searchResultsEl = document.getElementById('search-results');
 
-const geocoder = new MaplibreGeocoder(geocoderApi, { maplibregl: maplibregl, marker: false });
-document.getElementById('search-wrapper').appendChild(geocoder.onAdd(map));
+searchInput.addEventListener('input', () => {
+    clearTimeout(searchDebounce);
+    const q = searchInput.value.trim();
+    if (q.length < 2) { searchResultsEl.style.display = 'none'; return; }
+    searchDebounce = setTimeout(() => fetchSearchSuggestions(q), 300);
+});
 
-geocoder.on('result', (e) => {
-    pinnedCenter = e.result.center;
+searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { const first = searchResultsEl.querySelector('.search-result-item'); if (first) first.click(); }
+    if (e.key === 'Escape') searchResultsEl.style.display = 'none';
+    if (e.key === 'ArrowDown') { const first = searchResultsEl.querySelector('.search-result-item'); if (first) first.focus(); e.preventDefault(); }
+});
+
+searchResultsEl.addEventListener('keydown', (e) => {
+    const items = [...searchResultsEl.querySelectorAll('.search-result-item')];
+    const idx = items.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown' && idx < items.length - 1) { items[idx + 1].focus(); e.preventDefault(); }
+    if (e.key === 'ArrowUp') { idx > 0 ? items[idx - 1].focus() : searchInput.focus(); e.preventDefault(); }
+    if (e.key === 'Enter' && idx !== -1) { items[idx].click(); }
+    if (e.key === 'Escape') { searchResultsEl.style.display = 'none'; searchInput.focus(); }
+});
+
+document.addEventListener('click', (e) => {
+    if (!document.getElementById('search-container').contains(e.target)) searchResultsEl.style.display = 'none';
+});
+
+async function fetchSearchSuggestions(query) {
+    try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&addressdetails=1&limit=5`);
+        const data = await res.json();
+        if (data.length === 0) { searchResultsEl.style.display = 'none'; return; }
+        searchResultsEl.innerHTML = '';
+        data.forEach(item => {
+            const div = document.createElement('div');
+            div.className = 'search-result-item';
+            div.tabIndex = 0;
+            const name = item.display_name.split(',').slice(0, 3).join(',');
+            div.innerHTML = `<span class="result-name">${item.display_name.split(',')[0]}</span><span class="result-detail">${item.display_name.split(',').slice(1, 3).join(',').trim()}</span>`;
+            div.onclick = () => jumpToSearchResult(item);
+            searchResultsEl.appendChild(div);
+        });
+        searchResultsEl.style.display = 'block';
+    } catch(e) { console.error('Search failed', e); }
+}
+
+function jumpToSearchResult(item) {
+    pinnedCenter = [parseFloat(item.lon), parseFloat(item.lat)];
     centerMarker.setLngLat(pinnedCenter);
-    document.getElementById('location-name').textContent = e.result.place_name || e.result.text || '—';
+    map.flyTo({ center: pinnedCenter, zoom: 12 });
+    searchInput.value = item.display_name.split(',')[0];
+    searchResultsEl.style.display = 'none';
     updateCenterInfo();
     updateMapRings();
     triggerHybridAnalysis();
-    updateHash();
-});
-
-const CITY_PRESETS = {
-  manhattan:  { name: 'Manhattan',  center: [-73.9840, 40.7549], zoom: 13 },
-  paris:      { name: 'Paris',      center: [2.3522,   48.8566], zoom: 13 },
-  barcelona:  { name: 'Barcelona',  center: [2.1734,   41.3851], zoom: 13 },
-  tokyo:      { name: 'Tokyo',      center: [139.6503, 35.6762], zoom: 13 },
-  hcmc:       { name: 'HCMC',       center: [106.6297, 10.8231], zoom: 12 },
-};
-
-// Toggle preset dropdown visibility
-document.getElementById('preset-trigger').addEventListener('click', (e) => {
-  e.stopPropagation();
-  const menu = document.getElementById('preset-menu');
-  menu.hidden = !menu.hidden;
-});
-
-// Close dropdown when clicking outside
-document.addEventListener('click', () => {
-  document.getElementById('preset-menu').hidden = true;
-});
-
-// Handle preset selection
-document.getElementById('preset-menu').addEventListener('click', (e) => {
-  const li = e.target.closest('li');
-  if (!li) return;
-  const preset = CITY_PRESETS[li.dataset.city];
-  if (!preset) return;
-  document.getElementById('preset-menu').hidden = true;
-  pinnedCenter = preset.center;
-  centerMarker.setLngLat(pinnedCenter);
-  map.flyTo({ center: pinnedCenter, zoom: preset.zoom });
-  document.getElementById('location-name').textContent = preset.name;
-  updateCenterInfo();
-  updateMapRings();
-  triggerHybridAnalysis();
-  updateHash();
-});
-
-async function reverseGeocodePin(lngLat) {
-  const [lng, lat] = lngLat;
-  const controller = new AbortController();
-  const timer = setTimeout(() => {
-    controller.abort();
-    document.getElementById('location-name').textContent =
-      `Lat: ${lat.toFixed(4)}, Lng: ${lng.toFixed(4)}`;
-  }, 3000);
-
-  try {
-    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&zoom=10&format=json`;
-    const res = await fetch(url, { signal: controller.signal });
-    const data = await res.json();
-    clearTimeout(timer);
-    document.getElementById('location-name').textContent =
-      data.display_name || `Lat: ${lat.toFixed(4)}, Lng: ${lng.toFixed(4)}`;
-  } catch (e) {
-    clearTimeout(timer);
-    if (e.name !== 'AbortError') {
-      document.getElementById('location-name').textContent =
-        `Lat: ${lat.toFixed(4)}, Lng: ${lng.toFixed(4)}`;
-    }
-  }
 }
 
 centerMarker.on('dragend', () => {
-  const lngLat = centerMarker.getLngLat();
-  pinnedCenter = [lngLat.lng, lngLat.lat];
-  updateCenterInfo();
-  updateMapRings();
-  triggerHybridAnalysis();
-  reverseGeocodePin(pinnedCenter);
-  updateHash();
+    const lngLat = centerMarker.getLngLat();
+    pinnedCenter = [lngLat.lng, lngLat.lat];
+    updateCenterInfo();
+    updateMapRings();
+    triggerHybridAnalysis();
 });
 
 function updateCenterInfo() {
@@ -176,14 +139,96 @@ function updateCenterInfo() {
 }
 
 // --- UI Setup ---
-document.getElementById('mode-cumulative').onclick = (e) => { analysisMode = 'cumulative'; updateUIButtons(e.target); processAndDrawChart(); renderBreakdown(); updateHash(); };
-document.getElementById('mode-ring-only').onclick = (e) => { analysisMode = 'ring-only'; updateUIButtons(e.target); processAndDrawChart(); renderBreakdown(); updateHash(); };
+document.getElementById('sidebar-toggle').onclick = () => {
+    document.body.classList.toggle('sidebar-open');
+    document.getElementById('sidebar-toggle').textContent = document.body.classList.contains('sidebar-open') ? '✕' : '☰';
+    setTimeout(() => map.resize(), 350);
+};
 
-function updateUIButtons(el) {
-    document.querySelectorAll('.mode-pill').forEach(b => b.classList.remove('active'));
-    el.classList.add('active');
-    updateMapRings();
+
+const skipLayers = new Set(['satellite-layer', 'analysis-rings-fill', 'analysis-rings-line']);
+let isSatelliteMode = false;
+let satelliteHiddenLayers = [];
+let vectorOpacity = 0.55;
+
+function toggleSatellite(enabled) {
+    if (!map.getLayer('satellite-layer')) return;
+    map.setLayoutProperty('satellite-layer', 'visibility', enabled ? 'visible' : 'none');
+    if (enabled) {
+        satelliteHiddenLayers = [];
+        for (const { id, type } of map.getStyle().layers) {
+            if (skipLayers.has(id)) continue;
+            if (type === 'background' || type === 'fill') {
+                const vis = map.getLayoutProperty(id, 'visibility') ?? 'visible';
+                if (vis !== 'none') {
+                    map.setLayoutProperty(id, 'visibility', 'none');
+                    satelliteHiddenLayers.push(id);
+                }
+            } else if (type === 'line') {
+                map.setPaintProperty(id, 'line-opacity', vectorOpacity);
+            } else if (type === 'symbol') {
+                map.setPaintProperty(id, 'text-opacity', vectorOpacity);
+                map.setPaintProperty(id, 'icon-opacity', vectorOpacity);
+            }
+        }
+    } else {
+        for (const id of satelliteHiddenLayers) {
+            map.setLayoutProperty(id, 'visibility', 'visible');
+        }
+        satelliteHiddenLayers = [];
+        for (const { id, type } of map.getStyle().layers) {
+            if (skipLayers.has(id)) continue;
+            if (type === 'line') map.setPaintProperty(id, 'line-opacity', null);
+            else if (type === 'symbol') {
+                map.setPaintProperty(id, 'text-opacity', null);
+                map.setPaintProperty(id, 'icon-opacity', null);
+            }
+        }
+    }
 }
+
+function setBasemap(mode) {
+    isSatelliteMode = (mode === 'satellite');
+    document.getElementById('basemap-card-streets').classList.toggle('active', !isSatelliteMode);
+    document.getElementById('basemap-card-satellite').classList.toggle('active', isSatelliteMode);
+    document.getElementById('vec-opacity-row').style.display = isSatelliteMode ? 'flex' : 'none';
+    toggleSatellite(isSatelliteMode);
+}
+
+document.getElementById('vec-opacity-slider').oninput = (e) => {
+    vectorOpacity = e.target.value / 100;
+    if (!isSatelliteMode) return;
+    for (const { id, type } of map.getStyle().layers) {
+        if (skipLayers.has(id)) continue;
+        if (type === 'line') map.setPaintProperty(id, 'line-opacity', vectorOpacity);
+        else if (type === 'symbol') {
+            map.setPaintProperty(id, 'text-opacity', vectorOpacity);
+            map.setPaintProperty(id, 'icon-opacity', vectorOpacity);
+        }
+    }
+};
+
+const attrToggle = document.getElementById('attr-toggle');
+const attrText = document.getElementById('attr-text');
+attrToggle.onclick = () => { attrText.style.display = attrText.style.display === 'block' ? 'none' : 'block'; };
+document.addEventListener('click', (e) => {
+    if (!document.getElementById('map-attribution').contains(e.target)) attrText.style.display = 'none';
+});
+
+document.getElementById('color-mode-radii').onclick = () => {
+    colorMode = 'radii';
+    document.getElementById('color-mode-radii').classList.add('active');
+    document.getElementById('color-mode-type').classList.remove('active');
+    document.getElementById('road-type-list').style.display = 'none';
+    hoveredRingIndex = -1; renderRadiiUI(); processAndDrawChart(); updateMapRings();
+};
+document.getElementById('color-mode-type').onclick = () => {
+    colorMode = 'type';
+    document.getElementById('color-mode-type').classList.add('active');
+    document.getElementById('color-mode-radii').classList.remove('active');
+    document.getElementById('road-type-list').style.display = 'flex';
+    hoveredRingIndex = -1; renderRadiiUI(); processAndDrawChart(); updateMapRings();
+};
 
 function getRingColor(i) { return ringColors[i % ringColors.length]; }
 
@@ -200,93 +245,50 @@ function renderRadiiUI() {
         row.innerHTML = `<div class="color-swatch" style="background-color: ${getRingColor(i)}"></div>
             <input type="number" value="${radius}" step="0.5" min="0.5" data-index="${i}">
             <span class="unit-label">km</span><button class="remove-btn">×</button>`;
-
+        
         row.querySelector('input').onchange = (e) => {
             let val = parseFloat(e.target.value);
-            if (val > 0) { radii[i] = val; radii.sort((a, b) => a - b); renderRadiiUI(); triggerHybridAnalysis(); updateMapRings(); updateHash(); }
+            if (val > 0) { radii[i] = val; radii.sort((a, b) => a - b); renderRadiiUI(); triggerHybridAnalysis(); updateMapRings(); }
         };
         row.querySelector('.remove-btn').onclick = () => {
-            if (radii.length > 1) { radii.splice(i, 1); hoveredRingIndex = -1; renderRadiiUI(); triggerHybridAnalysis(); updateMapRings(); updateHash(); }
+            if (radii.length > 1) { radii.splice(i, 1); hoveredRingIndex = -1; renderRadiiUI(); triggerHybridAnalysis(); updateMapRings(); }
         };
         container.appendChild(row);
     });
 }
 
-document.getElementById('add-radius-btn').onclick = () => { radii.push(radii[radii.length - 1] + 2.0); renderRadiiUI(); triggerHybridAnalysis(); updateMapRings(); updateHash(); };
+document.getElementById('add-radius-btn').onclick = () => { radii.push(radii[radii.length - 1] + 2.0); renderRadiiUI(); triggerHybridAnalysis(); updateMapRings(); };
 
-function renderBreakdown() {
-  const list = document.getElementById('breakdown-list');
-  const toggle = document.getElementById('breakdown-toggle');
-  if (!list) return;
-  list.innerHTML = '';
-
-  const MAX_VISIBLE = 3;
-  const showAll = list.dataset.expanded === 'true';
-
-  radii.forEach((radius, i) => {
-    const bins = globalNormalizedBins[i];
-    const row = document.createElement('div');
-    row.className = 'breakdown-row';
-    if (hoveredRingIndex === i) row.classList.add('highlighted');
-
-    let label = '—';
-    if (bins) {
-      const { dominant } = computeDominantDirections(bins);
-      if (dominant) {
-        label = `${binToCompassLabel(dominant.bins[0])}–${binToCompassLabel(dominant.bins[1])} · ${dominant.combined.toFixed(0)}%`;
-      }
-    }
-
-    row.innerHTML = `
-      <span class="swatch" style="background:${getRingColor(i)}"></span>
-      <span>${radius} km</span>
-      <span class="ring-stat">${label}</span>`;
-
-    if (i >= MAX_VISIBLE && !showAll) {
-      row.style.display = 'none';
-    }
-    list.appendChild(row);
-  });
-
-  if (toggle) {
-    if (radii.length > MAX_VISIBLE) {
-      toggle.hidden = false;
-      toggle.textContent = showAll ? 'Show less ↑' : 'Show all ↓';
-      toggle.onclick = () => {
-        list.dataset.expanded = showAll ? 'false' : 'true';
-        renderBreakdown();
-      };
-    } else {
-      toggle.hidden = true;
-    }
-  }
+function renderRoadTypeUI() {
+    const container = document.getElementById('road-type-list');
+    container.innerHTML = '';
+    roadTypeGroups.forEach(g => {
+        const row = document.createElement('label');
+        row.className = 'type-row';
+        row.innerHTML = `<input type="checkbox" ${activeTypeGroups.has(g.key) ? 'checked' : ''} data-key="${g.key}">
+            <span class="color-swatch" style="background:${g.color}"></span>
+            <span class="type-label">${g.label}</span>`;
+        row.querySelector('input').onchange = (e) => {
+            if (e.target.checked) activeTypeGroups.add(g.key); else activeTypeGroups.delete(g.key);
+            processAndDrawChart();
+        };
+        container.appendChild(row);
+    });
 }
 
 function updateStatus(state) {
-  const el = document.getElementById('data-status');
-  if (!el) return;
-  el.className = `badge ${state}`;
-  if (state === 'fast') el.innerText = 'FAST';
-  if (state === 'fetching') el.innerText = 'FETCHING…';
-  if (state === 'precise') {
-    el.innerText = 'PRECISE';
-    const line2 = document.getElementById('data-source-line2');
-    if (line2) {
-      const today = new Date().toISOString().slice(0, 10);
-      const maxR = radii[radii.length - 1];
-      line2.textContent = `${lastSegmentCount.toLocaleString()} segments · ${maxR} km radius · ${today}`;
-    }
-  }
-  if (state === 'timeout') {
-    el.textContent = 'TIMEOUT';
-  }
+    const el = document.getElementById('data-status');
+    el.className = state;
+    if (state === 'fast') el.innerText = "FAST (MAP VIEW)";
+    if (state === 'fetching') el.innerText = "FETCHING PRECISE DATA...";
+    if (state === 'precise') el.innerText = "PRECISE (OVERPASS)";
 }
 
 // --- Hybrid Data Engine ---
 function extractLocalSegments() {
     const bounds = map.getBounds();
     const bbox = [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()];
-    const features = map.queryRenderedFeatures().filter(f =>
+    const features = map.queryRenderedFeatures().filter(f => 
         f.geometry && (f.geometry.type === 'LineString' || f.geometry.type === 'MultiLineString') &&
         f.layer && f.layer['source-layer'] && (f.layer['source-layer'] === 'street' || f.layer['source-layer'] === 'transportation')
     );
@@ -298,8 +300,9 @@ function extractLocalSegments() {
         lines.forEach(line => {
             const clipped = lineclip(line, bbox);
             clipped.forEach(clipLine => {
+                const hw = f.properties.class || f.properties.type || '';
                 for (let i = 0; i < clipLine.length - 1; i++) {
-                    segments.push({ p1: clipLine[i], p2: clipLine[i + 1], isTwoWay });
+                    segments.push({ p1: clipLine[i], p2: clipLine[i+1], isTwoWay, highway: hw });
                 }
             });
         });
@@ -308,7 +311,7 @@ function extractLocalSegments() {
 }
 
 async function fetchOverpassSegments(centerCoords, maxRadiusKm) {
-    if (activeAbortController) activeAbortController.abort();
+    if (activeAbortController) activeAbortController.abort(); 
     activeAbortController = new AbortController();
     const signal = activeAbortController.signal;
 
@@ -319,7 +322,7 @@ async function fetchOverpassSegments(centerCoords, maxRadiusKm) {
     if (dataCache[cacheKey]) return dataCache[cacheKey];
 
     updateStatus('fetching');
-
+    
     const query = `[out:json][timeout:25];(way["highway"](around:${radiusMeters},${lat},${lng}););out geom;`;
     const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
 
@@ -331,21 +334,17 @@ async function fetchOverpassSegments(centerCoords, maxRadiusKm) {
             if (el.type === 'way' && el.geometry) {
                 const coords = el.geometry.map(pt => [pt.lon, pt.lat]);
                 const isTwoWay = !(el.tags && (el.tags.oneway === 'yes' || el.tags.oneway === '1' || el.tags.oneway === '-1'));
+                const highway = (el.tags && el.tags.highway) || '';
                 for (let i = 0; i < coords.length - 1; i++) {
-                    segments.push({ p1: coords[i], p2: coords[i + 1], isTwoWay });
+                    segments.push({ p1: coords[i], p2: coords[i+1], isTwoWay, highway });
                 }
             }
         });
-        lastSegmentCount = segments.length;
-        dataCache[cacheKey] = segments;
+        dataCache[cacheKey] = segments; 
         return segments;
     } catch (error) {
-        if (error.name === 'AbortError') {
-            console.log('Previous fetch cancelled');
-        } else {
-            updateStatus('timeout');
-            document.getElementById('retry-btn').hidden = false;
-        }
+        if (error.name === 'AbortError') console.log('Previous fetch cancelled');
+        else console.error("Overpass fetch failed:", error);
         return null;
     }
 }
@@ -354,25 +353,16 @@ async function triggerHybridAnalysis() {
     currentSegments = extractLocalSegments();
     updateStatus('fast');
     processAndDrawChart();
-    renderBreakdown();
 
-    const fetchRadius = radii[radii.length - 1] + 1;
+    const fetchRadius = radii[radii.length - 1] + 1; 
     const preciseSegments = await fetchOverpassSegments(pinnedCenter, fetchRadius);
-
+    
     if (preciseSegments) {
-        const canvasEl = document.getElementById('canvas');
-        canvasEl.style.transition = 'opacity 0.2s';
-        canvasEl.style.opacity = '0';
-        setTimeout(() => {
-            currentSegments = preciseSegments;
-            updateStatus('precise');
-            processAndDrawChart();
-            renderBreakdown();
-            canvasEl.style.opacity = '1';
-            canvasEl.style.transition = '';
-        }, 220);
+        currentSegments = preciseSegments;
+        updateStatus('precise');
+        processAndDrawChart();
     } else if (!activeAbortController || !activeAbortController.signal.aborted) {
-        updateStatus('fast');
+        updateStatus('fast'); 
     }
 }
 
@@ -383,7 +373,6 @@ canvas.style.width = canvas.style.height = h + 'px';
 canvas.width = canvas.height = h;
 if (window.devicePixelRatio > 1) { canvas.width = canvas.height = h * 2; ctx.scale(2, 2); }
 
-
 function processAndDrawChart() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -392,75 +381,44 @@ function processAndDrawChart() {
     ctx.translate(r, r);
     ctx.rotate(-bearing * Math.PI / 180);
 
-    // Crosshair
-    ctx.strokeStyle = 'rgba(0,0,0,0.08)'; ctx.lineWidth = 0.5;
-    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(0,0,0,0.1)'; ctx.lineWidth = 0.5; ctx.beginPath();
     ctx.moveTo(-r, 0); ctx.lineTo(r, 0); ctx.moveTo(0, -r); ctx.lineTo(0, r); ctx.stroke();
 
-    // Scale grid circles at 25%, 50%, 75%, 100% of r
-    ctx.strokeStyle = 'rgba(0,0,0,0.08)';
-    ctx.lineWidth = 0.5;
-    for (let g = 1; g <= 4; g++) {
-      ctx.beginPath();
-      ctx.arc(0, 0, r * (g / 4), 0, 2 * Math.PI);
-      ctx.stroke();
-    }
-
-    // Compass labels
-    const labelOffset = r - 4;
-    ctx.fillStyle = '#64748b';
-    ctx.font = `bold ${Math.round(h * 0.09)}px Inter, system-ui, sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    [['N', 0, -labelOffset], ['S', 0, labelOffset], ['E', labelOffset, 0], ['W', -labelOffset, 0]]
-      .forEach(([label, x, y]) => ctx.fillText(label, x, y));
-
-    const noDataMsg = document.getElementById('no-data-msg');
-    if (!currentSegments || currentSegments.length === 0) {
-      if (noDataMsg) noDataMsg.hidden = false;
-      ctx.restore();
-      return;
-    }
-    if (noDataMsg) noDataMsg.hidden = true;
+    if (!currentSegments || currentSegments.length === 0) { ctx.restore(); return; }
 
     const ruler = new CheapRuler(pinnedCenter[1]);
-    const stackedBins = Array.from({ length: radii.length }, () => new Float64Array(numBins));
-    const maxRadius = radii[radii.length - 1];
 
-    currentSegments.forEach(seg => {
-        const midPt = [(seg.p1[0] + seg.p2[0]) / 2, (seg.p1[1] + seg.p2[1]) / 2];
-        const distToCenter = ruler.distance(pinnedCenter, midPt);
-        if (distToCenter > maxRadius) return;
+    if (colorMode === 'radii') {
+        // --- Radii mode: cumulative rings, colored by distance band ---
+        const stackedBins = Array.from({ length: radii.length }, () => new Float64Array(numBins));
+        const maxRadius = radii[radii.length - 1];
 
-        let ringIndex = 0;
-        for (let rIdx = 0; rIdx < radii.length; rIdx++) {
-            if (distToCenter <= radii[rIdx]) { ringIndex = rIdx; break; }
-        }
-
-        const segBearing = ruler.bearing(seg.p1, seg.p2);
-        const distance = ruler.distance(seg.p1, seg.p2);
-        const k0 = Math.round((segBearing + 360) * numBins / 360) % numBins;
-        const k1 = Math.round((segBearing + 180) * numBins / 360) % numBins;
-
-        stackedBins[ringIndex][k0] += distance;
-        if (seg.isTwoWay) stackedBins[ringIndex][k1] += distance;
-    });
-
-    const ringTotals = new Float64Array(radii.length);
-    for (let ring = 0; ring < radii.length; ring++) {
-        for (let b = 0; b < numBins; b++) ringTotals[ring] += stackedBins[ring][b];
-    }
-
-    let maxPercentage = 0;
-    globalNormalizedBins = Array.from({ length: radii.length }, () => new Float64Array(numBins));
-
-    if (analysisMode === 'cumulative') {
-        const cumulativeTotals = new Float64Array(radii.length);
-        for (let ring = 0; ring < radii.length; ring++) {
-            for (let b = 0; b < numBins; b++) {
-                for (let k = 0; k <= ring; k++) cumulativeTotals[ring] += stackedBins[k][b];
+        currentSegments.forEach(seg => {
+            const midPt = [(seg.p1[0] + seg.p2[0]) / 2, (seg.p1[1] + seg.p2[1]) / 2];
+            const distToCenter = ruler.distance(pinnedCenter, midPt);
+            if (distToCenter > maxRadius) return;
+            let ringIndex = 0;
+            for (let rIdx = 0; rIdx < radii.length; rIdx++) {
+                if (distToCenter <= radii[rIdx]) { ringIndex = rIdx; break; }
             }
-        }
+            const segBearing = ruler.bearing(seg.p1, seg.p2);
+            const distance = ruler.distance(seg.p1, seg.p2);
+            const k0 = Math.round((segBearing + 360) * numBins / 360) % numBins;
+            const k1 = Math.round((segBearing + 180) * numBins / 360) % numBins;
+            stackedBins[ringIndex][k0] += distance;
+            if (seg.isTwoWay) stackedBins[ringIndex][k1] += distance;
+        });
+
+        const ringTotals = new Float64Array(radii.length);
+        for (let ring = 0; ring < radii.length; ring++)
+            for (let b = 0; b < numBins; b++) ringTotals[ring] += stackedBins[ring][b];
+
+        let maxPercentage = 0;
+        globalNormalizedBins = Array.from({ length: radii.length }, () => new Float64Array(numBins));
+        const cumulativeTotals = new Float64Array(radii.length);
+        for (let ring = 0; ring < radii.length; ring++)
+            for (let b = 0; b < numBins; b++)
+                for (let k = 0; k <= ring; k++) cumulativeTotals[ring] += stackedBins[k][b];
         const sharedTotal = cumulativeTotals[radii.length - 1];
         if (sharedTotal > 0) {
             for (let ring = 0; ring < radii.length; ring++) {
@@ -473,64 +431,135 @@ function processAndDrawChart() {
                 }
             }
         }
-    } else {
-        for (let ring = 0; ring < radii.length; ring++) {
+
+        if (maxPercentage === 0) { ctx.restore(); return; }
+
+        ctx.strokeStyle = 'rgba(0,0,0,0.08)'; ctx.lineWidth = 0.5;
+        for (let g = 1; g <= 4; g++) {
+            ctx.beginPath(); ctx.arc(0, 0, r * Math.sqrt(g / 4), 0, 2 * Math.PI, false); ctx.stroke();
+        }
+
+        const ringsToDraw = [];
+        for (let i = radii.length - 1; i >= 0; i--) if (i !== hoveredRingIndex) ringsToDraw.push(i);
+        if (hoveredRingIndex !== -1 && hoveredRingIndex < radii.length) ringsToDraw.push(hoveredRingIndex);
+
+        for (const ring of ringsToDraw) {
             if (ringTotals[ring] === 0) continue;
+            const isHovered = hoveredRingIndex === -1 || hoveredRingIndex === ring;
+            ctx.fillStyle = getRingColor(ring);
+            ctx.globalAlpha = isHovered ? (hoveredRingIndex !== -1 ? 0.85 : 0.6) : 0.1;
+            ctx.beginPath(); ctx.moveTo(0, 0);
             for (let b = 0; b < numBins; b++) {
-                const pct = (stackedBins[ring][b] / ringTotals[ring]) * 100;
-                globalNormalizedBins[ring][b] = pct;
-                if (pct > maxPercentage) maxPercentage = pct;
+                const a0 = ((b - 0.5) * 360 / numBins - 90) * Math.PI / 180;
+                const a1 = ((b + 0.5) * 360 / numBins - 90) * Math.PI / 180;
+                const pct = globalNormalizedBins[ring][b];
+                if (pct > 0) { ctx.arc(0, 0, r * Math.sqrt(pct / maxPercentage), a0, a1, false); ctx.lineTo(0, 0); }
             }
+            ctx.fill();
+            ctx.globalAlpha = isHovered ? 1.0 : 0.2;
+            ctx.strokeStyle = getRingColor(ring); ctx.lineWidth = 1.0; ctx.stroke();
         }
+
+    } else {
+        // --- Type mode: cumulative per type, same rings logic as radii mode ---
+        const stackedTypeBins = {};
+        roadTypeGroups.forEach(g => {
+            if (activeTypeGroups.has(g.key))
+                stackedTypeBins[g.key] = Array.from({ length: radii.length }, () => new Float64Array(numBins));
+        });
+
+        const outerRadius = radii[radii.length - 1];
+        currentSegments.forEach(seg => {
+            const midPt = [(seg.p1[0] + seg.p2[0]) / 2, (seg.p1[1] + seg.p2[1]) / 2];
+            const distToCenter = ruler.distance(pinnedCenter, midPt);
+            if (distToCenter > outerRadius) return;
+            let ringIndex = 0;
+            for (let rIdx = 0; rIdx < radii.length; rIdx++) {
+                if (distToCenter <= radii[rIdx]) { ringIndex = rIdx; break; }
+            }
+            const hw = seg.highway || '';
+            let groupKey = null;
+            for (const g of roadTypeGroups) { if (g.types.has(hw)) { groupKey = g.key; break; } }
+            if (!groupKey || !activeTypeGroups.has(groupKey)) return;
+            const bins = stackedTypeBins[groupKey][ringIndex];
+            const segBearing = ruler.bearing(seg.p1, seg.p2);
+            const distance = ruler.distance(seg.p1, seg.p2);
+            const k0 = Math.round((segBearing + 360) * numBins / 360) % numBins;
+            const k1 = Math.round((segBearing + 180) * numBins / 360) % numBins;
+            bins[k0] += distance;
+            if (seg.isTwoWay) bins[k1] += distance;
+        });
+
+        // Shared total (all types, all raw rings)
+        let total = 0;
+        roadTypeGroups.forEach(g => {
+            if (!stackedTypeBins[g.key]) return;
+            for (let ring = 0; ring < radii.length; ring++)
+                for (let b = 0; b < numBins; b++) total += stackedTypeBins[g.key][ring][b];
+        });
+        if (total === 0) { ctx.restore(); return; }
+
+        // Build cumulative normalized bins per type per ring
+        const normTypeBins = {};
+        let maxPercentage = 0;
+        roadTypeGroups.forEach(g => {
+            if (!stackedTypeBins[g.key]) return;
+            normTypeBins[g.key] = Array.from({ length: radii.length }, () => new Float64Array(numBins));
+            for (let ring = 0; ring < radii.length; ring++) {
+                for (let b = 0; b < numBins; b++) {
+                    let cumVal = 0;
+                    for (let k = 0; k <= ring; k++) cumVal += stackedTypeBins[g.key][k][b];
+                    const pct = (cumVal / total) * 100;
+                    normTypeBins[g.key][ring][b] = pct;
+                    if (pct > maxPercentage) maxPercentage = pct;
+                }
+            }
+        });
+        if (maxPercentage === 0) { ctx.restore(); return; }
+
+        // Store flat tooltip data: use hovered ring or outermost
+        const tooltipRing = hoveredRingIndex !== -1 ? hoveredRingIndex : radii.length - 1;
+        globalTypeNorms = {};
+        roadTypeGroups.forEach(g => { if (normTypeBins[g.key]) globalTypeNorms[g.key] = normTypeBins[g.key][tooltipRing]; });
+
+        ctx.strokeStyle = 'rgba(0,0,0,0.08)'; ctx.lineWidth = 0.5;
+        for (let g = 1; g <= 4; g++) {
+            ctx.beginPath(); ctx.arc(0, 0, r * Math.sqrt(g / 4), 0, 2 * Math.PI, false); ctx.stroke();
+        }
+
+        // Draw back-to-front by type; within each type, outer rings first, inner on top
+        ['path', 'service', 'local', 'arterial', 'major'].forEach(key => {
+            const g = roadTypeGroups.find(g => g.key === key);
+            if (!g || !activeTypeGroups.has(key) || !normTypeBins[key]) return;
+
+            function drawRing(ring, alpha) {
+                const norm = normTypeBins[key][ring];
+                ctx.fillStyle = g.color; ctx.globalAlpha = alpha;
+                ctx.beginPath(); ctx.moveTo(0, 0);
+                for (let b = 0; b < numBins; b++) {
+                    const a0 = ((b - 0.5) * 360 / numBins - 90) * Math.PI / 180;
+                    const a1 = ((b + 0.5) * 360 / numBins - 90) * Math.PI / 180;
+                    const pct = norm[b];
+                    if (pct > 0) { ctx.arc(0, 0, r * Math.sqrt(pct / maxPercentage), a0, a1, false); ctx.lineTo(0, 0); }
+                }
+                ctx.fill();
+                ctx.globalAlpha = Math.min(alpha + 0.15, 1.0); ctx.strokeStyle = g.color; ctx.lineWidth = 0.7; ctx.stroke();
+            }
+
+            if (hoveredRingIndex === -1) {
+                for (let ring = radii.length - 1; ring >= 0; ring--) {
+                    const t = radii.length === 1 ? 1 : (radii.length - 1 - ring) / (radii.length - 1);
+                    drawRing(ring, 0.35 + t * 0.3);
+                }
+            } else {
+                for (let ring = radii.length - 1; ring >= 0; ring--)
+                    if (ring !== hoveredRingIndex) drawRing(ring, 0.08);
+                drawRing(hoveredRingIndex, 0.75);
+            }
+        });
     }
 
-    if (maxPercentage === 0) { ctx.restore(); return; }
-
-    const ringsToDraw = [];
-    for (let i = radii.length - 1; i >= 0; i--) if (i !== hoveredRingIndex) ringsToDraw.push(i);
-    if (hoveredRingIndex !== -1 && hoveredRingIndex < radii.length) ringsToDraw.push(hoveredRingIndex);
-
-    for (let rIdx = 0; rIdx < ringsToDraw.length; rIdx++) {
-        const ring = ringsToDraw[rIdx];
-        if (ringTotals[ring] === 0) continue;
-
-        const isHovered = hoveredRingIndex === -1 || hoveredRingIndex === ring;
-        ctx.fillStyle = getRingColor(ring);
-        ctx.globalAlpha = isHovered ? (hoveredRingIndex !== -1 ? 0.85 : 0.6) : 0.1;
-
-        ctx.beginPath(); ctx.moveTo(0, 0);
-        for (let b = 0; b < numBins; b++) {
-            const a0 = ((b - 0.5) * 360 / numBins - 90) * Math.PI / 180;
-            const a1 = ((b + 0.5) * 360 / numBins - 90) * Math.PI / 180;
-            const percentage = globalNormalizedBins[ring][b];
-            if (percentage > 0) {
-                ctx.arc(0, 0, r * Math.sqrt(percentage / maxPercentage), a0, a1, false);
-                ctx.lineTo(0, 0);
-            }
-        }
-        ctx.fill();
-        ctx.globalAlpha = isHovered ? 1.0 : 0.2; ctx.strokeStyle = getRingColor(ring); ctx.lineWidth = 1.0; ctx.stroke();
-    }
     ctx.globalAlpha = 1.0; ctx.restore();
-
-    // Update dominant direction panel
-    const outerBins = globalNormalizedBins[radii.length - 1];
-    const { dominant, secondary } = computeDominantDirections(outerBins);
-    const domEl = document.getElementById('dominant-value');
-    const secEl = document.getElementById('secondary-value');
-    if (domEl) {
-      if (dominant) {
-        const label = `${binToCompassLabel(dominant.bins[0])} – ${binToCompassLabel(dominant.bins[1])}`;
-        domEl.textContent = `${label} · ${dominant.combined.toFixed(1)}%`;
-      } else {
-        domEl.textContent = '—';
-      }
-    }
-    if (secEl) {
-      secEl.textContent = secondary
-        ? `Secondary: ${binToCompassLabel(secondary.bins[0])}–${binToCompassLabel(secondary.bins[1])}`
-        : '';
-    }
 }
 
 // --- Map Ring Geometries ---
@@ -540,11 +569,7 @@ function updateMapRings() {
     for (let i = radii.length - 1; i >= 0; i--) {
         const radius = radii[i];
         const outerCircle = turf.circle(pinnedCenter, radius, { steps: 64, units: 'kilometers' });
-        let coords = [outerCircle.geometry.coordinates[0]];
-        if (analysisMode === 'ring-only' && i > 0) {
-            const innerCircle = turf.circle(pinnedCenter, radii[i - 1], { steps: 64, units: 'kilometers' });
-            coords.push(innerCircle.geometry.coordinates[0].slice().reverse());
-        }
+        const coords = [outerCircle.geometry.coordinates[0]];
         features.push(turf.polygon(coords, {
             ringIndex: i, color: getRingColor(i),
             fillOpacity: Math.max(0.02, hoveredRingIndex === -1 ? 0.15 : (hoveredRingIndex === i ? 0.3 : 0.05)),
@@ -553,7 +578,7 @@ function updateMapRings() {
     }
     const geojson = { type: "FeatureCollection", features: features };
 
-    if (map.getSource('analysis-rings')) { map.getSource('analysis-rings').setData(geojson); }
+    if (map.getSource('analysis-rings')) { map.getSource('analysis-rings').setData(geojson); } 
     else {
         map.addSource('analysis-rings', { type: 'geojson', data: geojson });
         map.addLayer({ 'id': 'analysis-rings-fill', 'type': 'fill', 'source': 'analysis-rings', 'paint': { 'fill-color': ['get', 'color'], 'fill-opacity': ['get', 'fillOpacity'] } });
@@ -568,142 +593,52 @@ function getCompassDirection(degrees) {
     return dirs[index];
 }
 
-function computeDominantDirections(bins, numBins = 64) {
-  const half = numBins / 2;
-  const pairs = [];
-  for (let k = 0; k < half; k++) {
-    pairs.push({ bins: [k, k + half], combined: bins[k] + bins[k + half] });
-  }
-  pairs.sort((a, b) => b.combined - a.combined);
-  const dominant = pairs[0].combined > 0 ? pairs[0] : null;
-  const secondary = pairs[1] && pairs[1].combined > 0 ? pairs[1] : null;
-  return { dominant, secondary };
-}
-
-function binToCompassLabel(binIndex, numBins = 64) {
-  const deg = (binIndex / numBins) * 360;
-  const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
-  return dirs[Math.round(deg / 22.5) % 16];
-}
-
 function hideTooltip() {
     document.getElementById('chart-tooltip').style.display = 'none';
 }
 
-// --- Permalink ---
-function encodeHash({ lat, lng, zoom, radii, mode, explainerOpen }) {
-  const r = radii.join('-');
-  const e = explainerOpen ? '' : ',0';
-  return `#${lat.toFixed(4)},${lng.toFixed(4)},${zoom},${r},${mode}${e}`;
-}
-
-function decodeHash(hash) {
-  if (!hash || hash.length < 2) return null;
-  const parts = hash.slice(1).split(',');
-  if (parts.length < 5) return null;
-  try {
-    return {
-      lat: parseFloat(parts[0]),
-      lng: parseFloat(parts[1]),
-      zoom: parseInt(parts[2], 10),
-      radii: parts[3].split('-').map(Number),
-      mode: parts[4],
-      explainerOpen: parts[5] !== '0',
-    };
-  } catch { return null; }
-}
-
-function updateHash() {
-  const explainer = document.getElementById('explainer');
-  const explainerOpen = explainer ? explainer.hasAttribute('open') : true;
-  window.location.hash = encodeHash({
-    lat: pinnedCenter[1],
-    lng: pinnedCenter[0],
-    zoom: Math.round(map.getZoom()),
-    radii,
-    mode: analysisMode,
-    explainerOpen,
-  });
-}
-
-document.getElementById('retry-btn').addEventListener('click', () => {
-  document.getElementById('retry-btn').hidden = true;
-  triggerHybridAnalysis();
-});
-
 // --- Event Listeners ---
-map.on('load', () => {
-    applyAutoCollapse();
-    window.addEventListener('resize', applyAutoCollapse);
-
-    const saved = decodeHash(window.location.hash);
-    if (saved) {
-      pinnedCenter = [saved.lng, saved.lat];
-      centerMarker.setLngLat(pinnedCenter);
-      map.setCenter(pinnedCenter);
-      map.setZoom(saved.zoom);
-      radii = saved.radii;
-      analysisMode = saved.mode;
-      const explainerEl = document.getElementById('explainer');
-      if (explainerEl && !saved.explainerOpen) {
-        explainerEl.removeAttribute('open');
-      }
-      document.querySelectorAll('.mode-pill').forEach(b => b.classList.remove('active'));
-      const activeId = analysisMode === 'cumulative' ? 'mode-cumulative' : 'mode-ring-only';
-      const activeBtn = document.getElementById(activeId);
-      if (activeBtn) activeBtn.classList.add('active');
-    }
-
-    if (!saved) {
-      // Geocode HCMC to place pin at the OSM name node, not hardcoded coords
-      geocoderApi.forwardGeocode({ query: 'Ho Chi Minh City, Vietnam', language: ['en'] })
-        .then(result => {
-          const f = result.features && result.features[0];
-          if (f && f.properties && f.properties.lat && f.properties.lon) {
-            pinnedCenter = [parseFloat(f.properties.lon), parseFloat(f.properties.lat)];
+map.on('load', async () => {
+    // Geocode HCMC name node on startup
+    try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent('Ho Chi Minh City, Vietnam')}&format=json&limit=1`);
+        const data = await res.json();
+        if (data.length > 0) {
+            pinnedCenter = [parseFloat(data[0].lon), parseFloat(data[0].lat)];
             centerMarker.setLngLat(pinnedCenter);
             map.setCenter(pinnedCenter);
-            const name = (f.properties.display_name || 'Ho Chi Minh City').split(',')[0].trim();
-            document.getElementById('location-name').textContent = name;
-          }
-        })
-        .catch(() => {}) // keep hardcoded fallback on network error
-        .finally(() => {
-          updateCenterInfo(); renderRadiiUI(); updateMapRings();
-          setTimeout(() => { triggerHybridAnalysis(); }, 800);
-        });
-    } else {
-      updateCenterInfo(); renderRadiiUI(); updateMapRings();
-      setTimeout(() => { triggerHybridAnalysis(); }, 800);
-    }
+            searchInput.value = 'Ho Chi Minh City';
+        }
+    } catch(e) { console.error('Initial geocode failed', e); }
 
+    // Add satellite basemap layer below all Positron layers
+    const firstStyleLayerId = map.getStyle().layers[0]?.id;
+    map.addSource('satellite', {
+        type: 'raster',
+        tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+        tileSize: 256,
+        attribution: '© Esri, Maxar, Earthstar Geographics'
+    });
+    map.addLayer({ id: 'satellite-layer', type: 'raster', source: 'satellite', layout: { visibility: 'none' } }, firstStyleLayerId);
+
+    updateCenterInfo(); renderRadiiUI(); renderRoadTypeUI(); updateMapRings();
+    setTimeout(() => { triggerHybridAnalysis(); }, 400);
+    
     map.on('mousemove', 'analysis-rings-fill', (e) => {
         if (e.features.length > 0) {
             const idx = e.features[0].properties.ringIndex;
-            if (idx !== hoveredRingIndex) { hoveredRingIndex = idx; map.getCanvas().style.cursor = 'pointer'; renderRadiiUI(); processAndDrawChart(); renderBreakdown(); updateMapRings(); }
+            if (idx !== hoveredRingIndex) { hoveredRingIndex = idx; map.getCanvas().style.cursor = 'pointer'; renderRadiiUI(); processAndDrawChart(); updateMapRings(); }
         }
     });
     map.on('mouseleave', 'analysis-rings-fill', () => {
-        if (hoveredRingIndex !== -1) { hoveredRingIndex = -1; map.getCanvas().style.cursor = ''; renderRadiiUI(); processAndDrawChart(); renderBreakdown(); updateMapRings(); }
+        if (hoveredRingIndex !== -1) { hoveredRingIndex = -1; map.getCanvas().style.cursor = ''; renderRadiiUI(); processAndDrawChart(); updateMapRings(); }
     });
-
-    map.on('click', (e) => {
-      pinnedCenter = [e.lngLat.lng, e.lngLat.lat];
-      centerMarker.setLngLat(pinnedCenter);
-      updateCenterInfo();
-      updateMapRings();
-      triggerHybridAnalysis();
-      reverseGeocodePin(pinnedCenter);
-      updateHash();
-    });
-
 });
 
 map.on('moveend', () => {
-    if (document.getElementById('data-status').classList.contains('fast')) {
+    if (document.getElementById('data-status').className === 'fast') {
         currentSegments = extractLocalSegments();
         processAndDrawChart();
-        renderBreakdown();
     }
 });
 
@@ -712,75 +647,67 @@ const canvasContainer = document.getElementById('canvas-container');
 const tooltip = document.getElementById('chart-tooltip');
 
 canvasContainer.addEventListener('mousemove', (e) => {
-  const rect = canvasContainer.getBoundingClientRect();
-  const mx = e.clientX - rect.left - r;
-  const my = e.clientY - rect.top - r;
-  const dist = Math.sqrt(mx * mx + my * my);
+    const rect = canvasContainer.getBoundingClientRect();
+    const mx = e.clientX - rect.left - r;
+    const my = e.clientY - rect.top - r;
+    const dist = Math.sqrt(mx*mx + my*my);
 
-  if (dist > r) {
-    if (hoveredRingIndex !== -1) {
-      hoveredRingIndex = -1;
-      renderRadiiUI(); processAndDrawChart(); renderBreakdown(); updateMapRings();
+    if (dist > r) {
+        if (colorMode === 'radii' && hoveredRingIndex !== -1) {
+            hoveredRingIndex = -1; renderRadiiUI(); processAndDrawChart(); updateMapRings();
+        }
+        hideTooltip(); return;
     }
-    hideTooltip();
-    return;
-  }
 
-  const bestRing = Math.min(Math.floor((dist / r) * radii.length), radii.length - 1);
-  if (bestRing !== hoveredRingIndex) {
-    hoveredRingIndex = bestRing;
-    renderRadiiUI(); processAndDrawChart(); renderBreakdown(); updateMapRings();
-  }
-
-  if (globalNormalizedBins.length > 0 && hoveredRingIndex !== -1) {
     let angleDeg = (Math.atan2(my, mx) * 180 / Math.PI) + 90 + map.getBearing();
     angleDeg = (angleDeg % 360 + 360) % 360;
     const binIndex = Math.round(angleDeg * numBins / 360) % numBins;
-    const percentage = globalNormalizedBins[hoveredRingIndex][binIndex];
     const compassDir = getCompassDirection(angleDeg);
-    const color = getRingColor(hoveredRingIndex);
-    const radius = radii[hoveredRingIndex];
 
-    tooltip.style.display = 'block';
-    tooltip.style.left = e.clientX + 'px';
-    tooltip.style.top = e.clientY + 'px';
-    tooltip.innerHTML = `
-      <div style="display:flex;align-items:center;">
-        <span class="tooltip-dot" style="background:${color}"></span>
-        <span style="color:#94a3b8;">${radius}km ring</span>
-      </div>
-      <div class="tooltip-val">${compassDir} (${Math.round(angleDeg)}°)</div>
-      <div style="font-size:0.82rem;color:#cbd5e1;margin-top:3px;">
-        ${percentage.toFixed(2)}% of road length
-      </div>`;
-  }
+    if (colorMode === 'radii') {
+        const bestRing = Math.min(Math.floor((dist / r) * radii.length), radii.length - 1);
+        if (bestRing !== hoveredRingIndex) {
+            hoveredRingIndex = bestRing; renderRadiiUI(); processAndDrawChart(); updateMapRings();
+        }
+        if (globalNormalizedBins.length > 0 && hoveredRingIndex !== -1) {
+            const pct = globalNormalizedBins[hoveredRingIndex][binIndex];
+            const color = getRingColor(hoveredRingIndex);
+            tooltip.style.display = 'block';
+            tooltip.style.left = e.clientX + 'px';
+            tooltip.style.top = e.clientY + 'px';
+            tooltip.innerHTML = `
+                <div style="display:flex;align-items:center;">
+                    <span class="tooltip-dot" style="background:${color}"></span>
+                    <span style="color:#94a3b8;">${radii[hoveredRingIndex]}km Ring</span>
+                </div>
+                <div class="tooltip-val">${compassDir} (${Math.round(angleDeg)}°)</div>
+                <div style="font-size:0.85rem;color:#cbd5e1;margin-top:4px;">${pct.toFixed(2)}% of road length</div>
+            `;
+        }
+    } else {
+        if (Object.keys(globalTypeNorms).length === 0) return;
+        const topTypes = roadTypeGroups
+            .filter(g => activeTypeGroups.has(g.key) && globalTypeNorms[g.key])
+            .map(g => ({ label: g.label, color: g.color, pct: globalTypeNorms[g.key][binIndex] }))
+            .filter(e => e.pct > 0).sort((a, b) => b.pct - a.pct).slice(0, 4);
+        if (topTypes.length === 0) { hideTooltip(); return; }
+        const rangeLabel = hoveredRingIndex !== -1 ? ` · within ${radii[hoveredRingIndex]}km` : '';
+        tooltip.style.display = 'block';
+        tooltip.style.left = e.clientX + 'px';
+        tooltip.style.top = e.clientY + 'px';
+        tooltip.innerHTML = `
+            <div style="color:#94a3b8;font-size:0.75rem;margin-bottom:5px;">${compassDir} (${Math.round(angleDeg)}°)${rangeLabel}</div>
+            ${topTypes.map(t => `<div style="display:flex;align-items:center;gap:6px;margin-top:2px;">
+                <span class="tooltip-dot" style="background:${t.color}"></span>
+                <span>${t.label}: <strong>${t.pct.toFixed(1)}%</strong></span>
+            </div>`).join('')}
+        `;
+    }
 });
 
 canvasContainer.addEventListener('mouseleave', () => {
-  if (hoveredRingIndex !== -1) {
-    hoveredRingIndex = -1;
-    renderRadiiUI(); processAndDrawChart(); renderBreakdown(); updateMapRings();
-  }
-  hideTooltip();
-});
-
-
-document.getElementById('share-btn').addEventListener('click', async () => {
-  updateHash();
-  const url = window.location.href;
-  try {
-    await navigator.clipboard.writeText(url);
-    const btn = document.getElementById('share-btn');
-    const original = btn.textContent;
-    btn.textContent = 'Copied!';
-    setTimeout(() => { btn.textContent = original; }, 2000);
-  } catch {
-    const fallback = document.getElementById('share-fallback');
-    const input = document.getElementById('share-url-input');
-    if (fallback && input) {
-      fallback.hidden = false;
-      input.value = url;
-      input.select();
+    if (colorMode === 'radii' && hoveredRingIndex !== -1) {
+        hoveredRingIndex = -1; renderRadiiUI(); processAndDrawChart(); updateMapRings();
     }
-  }
+    hideTooltip();
 });

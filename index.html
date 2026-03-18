@@ -1,17 +1,12 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OSM Road Orientations - Hybrid Mode</title>
+    <title>OSM Road Orientations</title>
 
     <script src="https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.js"></script>
     <link href="https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.css" rel="stylesheet" />
-
-    <script src="https://unpkg.com/@maplibre/maplibre-gl-geocoder@1.5.0/dist/maplibre-gl-geocoder.min.js"></script>
-    <link rel="stylesheet" href="https://unpkg.com/@maplibre/maplibre-gl-geocoder@1.5.0/dist/maplibre-gl-geocoder.css"
-        type="text/css" />
 
     <script src="https://unpkg.com/cheap-ruler@3.0.1/cheap-ruler.js"></script>
     <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
@@ -19,129 +14,89 @@
     <link rel="stylesheet" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 </head>
+<body class="sidebar-open">
 
-<body>
+    <button id="sidebar-toggle">✕</button>
 
-  <!-- Top bar -->
-  <div id="topbar">
-    <div id="logo">Road<span>.</span>Orient</div>
-    <div id="search-wrapper"><!-- geocoder mounts here --></div>
-    <div id="topbar-center">
-      <div class="mode-pills">
-        <button id="mode-cumulative" class="mode-pill active">Cumulative</button>
-        <button id="mode-ring-only" class="mode-pill">Ring Only</button>
-      </div>
-      <div class="preset-dropdown-wrap">
-        <button id="preset-trigger">Try an example ▾</button>
-        <ul id="preset-menu" hidden>
-          <li data-city="manhattan">Manhattan</li>
-          <li data-city="paris">Paris</li>
-          <li data-city="barcelona">Barcelona</li>
-          <li data-city="tokyo">Tokyo</li>
-          <li data-city="hcmc">HCMC</li>
-        </ul>
-      </div>
+    <div id="sidebar">
+        <div class="sidebar-content">
+
+            <div class="sidebar-header">
+                <h3>Road Orientations</h3>
+            </div>
+
+            <details class="info-panel">
+                <summary>How to use</summary>
+                <p>Type a city in the search bar and pick from suggestions. Or drag the pin anywhere on the map. Add rings to compare distance bands. Hover a map ring to isolate it in the chart.</p>
+            </details>
+
+            <div class="sidebar-section">
+                <h4>Distance Radii (km)</h4>
+                <div id="radii-list"></div>
+                <button id="add-radius-btn" class="add-btn">+ Add Ring</button>
+            </div>
+
+            <div class="sidebar-section">
+                <div class="section-header-row">
+                    <h4>Road Types</h4>
+                    <div class="mode-pill">
+                        <button id="color-mode-radii" class="active">Radii</button>
+                        <button id="color-mode-type">Detail</button>
+                    </div>
+                </div>
+                <div id="road-type-list" style="display:none"></div>
+            </div>
+
+            <div class="sidebar-section last">
+                <h4>Center</h4>
+                <div id="center-info" class="coord-text"></div>
+            </div>
+
+        </div>
     </div>
-  </div>
 
-  <!-- Main two-column layout -->
-  <div id="main">
-
-    <!-- Left: map -->
     <div id="map"></div>
 
-    <!-- Right: analysis panel -->
-    <div id="panel">
+    <div id="basemap-switcher">
+        <div id="basemap-card-streets" class="basemap-card active" onclick="setBasemap('streets')">
+            <div class="basemap-thumb streets-thumb"></div>
+            <span>Streets</span>
+        </div>
+        <div id="basemap-card-satellite" class="basemap-card" onclick="setBasemap('satellite')">
+            <div class="basemap-thumb satellite-thumb"></div>
+            <span>Satellite</span>
+        </div>
+        <div id="vec-opacity-row">
+            <span>Map</span>
+            <input type="range" id="vec-opacity-slider" min="0" max="100" value="55">
+        </div>
+    </div>
 
-      <!-- Section 1: Explainer -->
-      <div class="panel-section" id="explainer-section">
-        <details id="explainer" open>
-          <summary>ℹ︎ How to read this chart</summary>
-          <div class="explainer-body">
-            <svg width="56" height="56" viewBox="-28 -28 56 56" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-              <!-- Background circle -->
-              <circle cx="0" cy="0" r="27" fill="none" stroke="#bfdbfe" stroke-width="1"/>
-              <!-- Long petal NE -->
-              <path d="M0,0 L15,-22 A24,24,0,0,1,22,-15 Z" fill="rgba(59,130,246,0.6)"/>
-              <!-- Long petal SW (opposite) -->
-              <path d="M0,0 L-15,22 A24,24,0,0,1,-22,15 Z" fill="rgba(59,130,246,0.6)"/>
-              <!-- Short petal NW -->
-              <path d="M0,0 L-8,-10 A11,11,0,0,1,-10,-8 Z" fill="rgba(59,130,246,0.35)"/>
-              <!-- Short petal SE (opposite) -->
-              <path d="M0,0 L8,10 A11,11,0,0,1,10,8 Z" fill="rgba(59,130,246,0.35)"/>
-              <!-- Compass labels -->
-              <text x="0" y="-29" text-anchor="middle" font-size="6" fill="#1e40af" font-family="system-ui">N</text>
-              <text x="0" y="34" text-anchor="middle" font-size="6" fill="#93c5fd" font-family="system-ui">S</text>
-              <text x="29" y="2" text-anchor="start" font-size="6" fill="#93c5fd" font-family="system-ui">E</text>
-              <text x="-29" y="2" text-anchor="end" font-size="6" fill="#93c5fd" font-family="system-ui">W</text>
-            </svg>
-            <p>Each petal shows how much total road length faces that compass direction. Longer petal = more roads oriented that way. Hover for exact percentages.</p>
-          </div>
-        </details>
-      </div>
+    <div id="map-attribution">
+        <button id="attr-toggle">©</button>
+        <div id="attr-text">© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors · © <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a> · © Esri (satellite)</div>
+    </div>
 
-      <!-- Section 2: Location header -->
-      <div class="panel-section" id="location-section">
-        <div id="location-name">—</div>
-        <span id="data-status" class="badge fast">FAST</span>
-        <div id="center-info" class="coord-text"></div>
-      </div>
+    <div id="search-container">
+        <input id="search-input" type="text" placeholder="Search for a city..." autocomplete="off" spellcheck="false">
+        <div id="search-results"></div>
+    </div>
 
-      <!-- Section 3: Rose diagram + dominant direction -->
-      <div class="panel-section" id="chart-section">
-        <div id="chart-row">
-          <div id="canvas-container">
-            <canvas id="canvas"></canvas>
-          </div>
-          <div id="dominant-block">
-            <div id="dominant-card">
-              <div class="dom-label">Dominant</div>
-              <div id="dominant-value">—</div>
-              <div id="secondary-value"></div>
+    <div id="chart-area">
+        <div id="chart-column">
+            <details id="chart-legend">
+                <summary>How to read</summary>
+                <p>Each petal = a compass bearing. Longer = more road length that way. Both modes are <strong>cumulative</strong>: each ring includes all roads from the center outward. <strong>Radii</strong>: colors are distance bands. <strong>Detail</strong>: colors are road types — toggle in sidebar. Hover chart for values; hover a map ring to isolate that band.</p>
+            </details>
+            <div id="canvas-container">
+                <canvas id="canvas"></canvas>
+                <div id="data-status" class="fast">FAST (MAP VIEW)</div>
             </div>
-          </div>
         </div>
-        <div id="no-data-msg" class="no-data-msg" hidden>No road data in this area.</div>
-        <button id="retry-btn" hidden>↺ Retry</button>
-      </div>
+    </div>
 
-      <!-- Section 4: Ring breakdown -->
-      <div class="panel-section" id="breakdown-section">
-        <div class="section-label">Ring Breakdown</div>
-        <div id="breakdown-list"></div>
-        <button id="breakdown-toggle" hidden>Show all ↓</button>
-      </div>
+    <div id="chart-tooltip"></div>
 
-      <!-- Section 5: Ring controls -->
-      <div class="panel-section" id="rings-section">
-        <div class="section-label">Analysis Rings (km)</div>
-        <div id="radii-list"></div>
-        <button id="add-radius-btn" class="add-btn">+ Add Ring</button>
-      </div>
-
-      <!-- Section 6: Data source -->
-      <div class="panel-section" id="source-section">
-        <div id="data-source-line1" class="data-source">Source: OpenStreetMap contributors via Overpass API</div>
-        <div id="data-source-line2" class="data-source"></div>
-      </div>
-
-      <!-- Section 7: Actions -->
-      <div class="panel-section" id="actions-section">
-        <div class="actions">
-          <button id="share-btn" class="btn btn-share">🔗 Share</button>
-        </div>
-        <div id="share-fallback" hidden>
-          <input id="share-url-input" type="text" readonly>
-        </div>
-      </div>
-
-    </div><!-- /#panel -->
-
-  </div><!-- /#main -->
-
-  <div id="chart-tooltip"></div>
-
-  <script src="script.js"></script>
+    <script src="script.js"></script>
 </body>
-
 </html>
