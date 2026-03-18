@@ -599,18 +599,6 @@ function hideTooltip() {
 
 // --- Event Listeners ---
 map.on('load', async () => {
-    // Geocode HCMC name node on startup
-    try {
-        const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent('Ho Chi Minh City, Vietnam')}&format=json&limit=1`);
-        const data = await res.json();
-        if (data.length > 0) {
-            pinnedCenter = [parseFloat(data[0].lon), parseFloat(data[0].lat)];
-            centerMarker.setLngLat(pinnedCenter);
-            map.setCenter(pinnedCenter);
-            searchInput.value = 'Ho Chi Minh City';
-        }
-    } catch(e) { console.error('Initial geocode failed', e); }
-
     // Add satellite basemap layer below all Positron layers
     const firstStyleLayerId = map.getStyle().layers[0]?.id;
     map.addSource('satellite', {
@@ -621,8 +609,22 @@ map.on('load', async () => {
     });
     map.addLayer({ id: 'satellite-layer', type: 'raster', source: 'satellite', layout: { visibility: 'none' } }, firstStyleLayerId);
 
+    // Draw rings and start analysis immediately at default center
     updateCenterInfo(); renderRadiiUI(); renderRoadTypeUI(); updateMapRings();
     setTimeout(() => { triggerHybridAnalysis(); }, 400);
+
+    // Geocode HCMC in background and update center when ready
+    try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent('Ho Chi Minh City, Vietnam')}&format=json&limit=1`);
+        const data = await res.json();
+        if (data.length > 0) {
+            pinnedCenter = [parseFloat(data[0].lon), parseFloat(data[0].lat)];
+            centerMarker.setLngLat(pinnedCenter);
+            map.setCenter(pinnedCenter);
+            searchInput.value = 'Ho Chi Minh City';
+            updateCenterInfo(); updateMapRings();
+        }
+    } catch(e) { console.error('Initial geocode failed', e); }
     
     map.on('mousemove', 'analysis-rings-fill', (e) => {
         if (e.features.length > 0) {
