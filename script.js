@@ -71,7 +71,7 @@ const geocoderApi = {
     forwardGeocode: async (config) => {
         const features = [];
         try {
-            const request = `https://nominatim.openstreetmap.org/search?q=${config.query}&format=geojson&polygon_geojson=1&addressdetails=1`;
+            const request = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(config.query)}&format=geojson&polygon_geojson=1&addressdetails=1`;
             const response = await fetch(request);
             const geojson = await response.json();
             for (let feature of geojson.features) {
@@ -96,6 +96,7 @@ document.getElementById('search-wrapper').appendChild(geocoder.onAdd(map));
 geocoder.on('result', (e) => {
     pinnedCenter = e.result.center;
     centerMarker.setLngLat(pinnedCenter);
+    document.getElementById('location-name').textContent = e.result.place_name || e.result.text || '—';
     updateCenterInfo();
     updateMapRings();
     triggerHybridAnalysis();
@@ -209,7 +210,7 @@ function renderRadiiUI() {
             if (val > 0) { radii[i] = val; radii.sort((a, b) => a - b); renderRadiiUI(); triggerHybridAnalysis(); updateMapRings(); updateHash(); }
         };
         row.querySelector('.remove-btn').onclick = () => {
-            if (radii.length > 1) { radii.splice(i, 1); hoveredRingIndex = -1; renderRadiiUI(); triggerHybridAnalysis(); updateMapRings(); }
+            if (radii.length > 1) { radii.splice(i, 1); hoveredRingIndex = -1; renderRadiiUI(); triggerHybridAnalysis(); updateMapRings(); updateHash(); }
         };
         container.appendChild(row);
     });
@@ -395,7 +396,7 @@ if (canvas2) {
 }
 
 function processAndDrawChart() {
-    ctx.clearRect(0, 0, h, h);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     const bearing = map.getBearing();
     ctx.save();
@@ -710,20 +711,39 @@ function processAndDrawCompareChart() {
     if (seg.isTwoWay) stackedBins[ringIndex][k1] += distance;
   });
 
-  // Normalise (cumulative mode)
+  // Normalise (respects analysisMode)
   compareNormalizedBins = Array.from({ length: radii.length }, () => new Float64Array(numBins));
   let maxPct = 0;
-  const sharedTotal = stackedBins.reduce((t, ring) => {
-    for (let b = 0; b < numBins; b++) t += ring[b];
-    return t;
-  }, 0);
 
-  if (sharedTotal > 0) {
+  const ringTotals2 = new Float64Array(radii.length);
+  for (let ring = 0; ring < radii.length; ring++) {
+    for (let b = 0; b < numBins; b++) ringTotals2[ring] += stackedBins[ring][b];
+  }
+
+  if (analysisMode === 'cumulative') {
+    const cumulativeTotals = new Float64Array(radii.length);
     for (let ring = 0; ring < radii.length; ring++) {
       for (let b = 0; b < numBins; b++) {
-        let cumVal = 0;
-        for (let k = 0; k <= ring; k++) cumVal += stackedBins[k][b];
-        const pct = (cumVal / sharedTotal) * 100;
+        for (let k = 0; k <= ring; k++) cumulativeTotals[ring] += stackedBins[k][b];
+      }
+    }
+    const sharedTotal = cumulativeTotals[radii.length - 1];
+    if (sharedTotal > 0) {
+      for (let ring = 0; ring < radii.length; ring++) {
+        for (let b = 0; b < numBins; b++) {
+          let cumVal = 0;
+          for (let k = 0; k <= ring; k++) cumVal += stackedBins[k][b];
+          const pct = (cumVal / sharedTotal) * 100;
+          compareNormalizedBins[ring][b] = pct;
+          if (pct > maxPct) maxPct = pct;
+        }
+      }
+    }
+  } else {
+    for (let ring = 0; ring < radii.length; ring++) {
+      if (ringTotals2[ring] === 0) continue;
+      for (let b = 0; b < numBins; b++) {
+        const pct = (stackedBins[ring][b] / ringTotals2[ring]) * 100;
         compareNormalizedBins[ring][b] = pct;
         if (pct > maxPct) maxPct = pct;
       }
@@ -843,9 +863,12 @@ map.on('load', () => {
     const wrapper2 = document.getElementById('search-wrapper-2');
     if (wrapper2) wrapper2.appendChild(geocoder2.onAdd(map));
 
+    let compareMarker = null;
+
     geocoder2.on('result', (e) => {
       compareCenter = e.result.center;
-      new maplibregl.Marker({ color: '#3b82f6', draggable: false })
+      if (compareMarker) compareMarker.remove();
+      compareMarker = new maplibregl.Marker({ color: '#3b82f6', draggable: false })
         .setLngLat(compareCenter).addTo(map);
       document.getElementById('location-name-2').textContent = e.result.place_name;
       document.getElementById('center-info-2').textContent =
@@ -858,7 +881,7 @@ map.on('load', () => {
 });
 
 map.on('moveend', () => {
-    if (document.getElementById('data-status').className === 'fast') {
+    if (document.getElementById('data-status').classList.contains('fast')) {
         currentSegments = extractLocalSegments();
         processAndDrawChart();
         renderBreakdown();
