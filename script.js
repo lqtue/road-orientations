@@ -604,49 +604,54 @@ const canvasContainer = document.getElementById('canvas-container');
 const tooltip = document.getElementById('chart-tooltip');
 
 canvasContainer.addEventListener('mousemove', (e) => {
-    const rect = canvasContainer.getBoundingClientRect();
-    const mx = e.clientX - rect.left - r;
-    const my = e.clientY - rect.top - r;
-    const dist = Math.sqrt(mx * mx + my * my);
+  const rect = canvasContainer.getBoundingClientRect();
+  const mx = e.clientX - rect.left - r;
+  const my = e.clientY - rect.top - r;
+  const dist = Math.sqrt(mx * mx + my * my);
 
-    if (dist > r) {
-        if (hoveredRingIndex !== -1) { hoveredRingIndex = -1; renderRadiiUI(); processAndDrawChart(); renderBreakdown(); updateMapRings(); }
-        hideTooltip();
-        return;
+  if (dist > r) {
+    if (hoveredRingIndex !== -1) {
+      hoveredRingIndex = -1;
+      renderRadiiUI(); processAndDrawChart(); renderBreakdown(); updateMapRings();
     }
+    hideTooltip();
+    return;
+  }
 
-    const bestRing = Math.min(Math.floor((dist / r) * radii.length), radii.length - 1);
-    if (bestRing !== hoveredRingIndex) {
-        hoveredRingIndex = bestRing;
-        renderRadiiUI(); processAndDrawChart(); renderBreakdown(); updateMapRings();
-    }
+  const bestRing = Math.min(Math.floor((dist / r) * radii.length), radii.length - 1);
+  if (bestRing !== hoveredRingIndex) {
+    hoveredRingIndex = bestRing;
+    renderRadiiUI(); processAndDrawChart(); renderBreakdown(); updateMapRings();
+  }
 
-    if (globalNormalizedBins.length > 0 && hoveredRingIndex !== -1) {
-        let angleDeg = (Math.atan2(my, mx) * 180 / Math.PI) + 90 + map.getBearing();
-        angleDeg = (angleDeg % 360 + 360) % 360;
-        const binIndex = Math.round(angleDeg * numBins / 360) % numBins;
-        const percentage = globalNormalizedBins[hoveredRingIndex][binIndex];
+  if (globalNormalizedBins.length > 0 && hoveredRingIndex !== -1) {
+    let angleDeg = (Math.atan2(my, mx) * 180 / Math.PI) + 90 + map.getBearing();
+    angleDeg = (angleDeg % 360 + 360) % 360;
+    const binIndex = Math.round(angleDeg * numBins / 360) % numBins;
+    const percentage = globalNormalizedBins[hoveredRingIndex][binIndex];
+    const compassDir = getCompassDirection(angleDeg);
+    const color = getRingColor(hoveredRingIndex);
+    const radius = radii[hoveredRingIndex];
 
-        const compassDir = getCompassDirection(angleDeg);
-        const color = getRingColor(hoveredRingIndex);
-
-        tooltip.style.display = 'block';
-        tooltip.style.left = e.clientX + 'px';
-        tooltip.style.top = e.clientY + 'px';
-        tooltip.innerHTML = `
-            <div style="display:flex; align-items:center;">
-                <span class="tooltip-dot" style="background-color: ${color}"></span>
-                <span style="color: #94a3b8;">${radii[hoveredRingIndex]}km Ring</span>
-            </div>
-            <div class="tooltip-val">${compassDir} (${Math.round(angleDeg)}°)</div>
-            <div style="font-size: 0.85rem; color: #cbd5e1; margin-top: 4px;">
-                ${percentage.toFixed(2)}% of road length
-            </div>
-        `;
-    }
+    tooltip.style.display = 'block';
+    tooltip.style.left = e.clientX + 'px';
+    tooltip.style.top = e.clientY + 'px';
+    tooltip.innerHTML = `
+      <div style="display:flex;align-items:center;">
+        <span class="tooltip-dot" style="background:${color}"></span>
+        <span style="color:#94a3b8;">${radius}km ring</span>
+      </div>
+      <div class="tooltip-val">${compassDir} (${Math.round(angleDeg)}°)</div>
+      <div style="font-size:0.82rem;color:#cbd5e1;margin-top:3px;">
+        ${percentage.toFixed(2)}% of road length
+      </div>`;
+  }
 });
 
 canvasContainer.addEventListener('mouseleave', () => {
-    if (hoveredRingIndex !== -1) { hoveredRingIndex = -1; renderRadiiUI(); processAndDrawChart(); renderBreakdown(); updateMapRings(); }
-    hideTooltip();
+  if (hoveredRingIndex !== -1) {
+    hoveredRingIndex = -1;
+    renderRadiiUI(); processAndDrawChart(); renderBreakdown(); updateMapRings();
+  }
+  hideTooltip();
 });
