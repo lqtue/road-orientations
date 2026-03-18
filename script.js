@@ -36,6 +36,11 @@ let hoveredRingIndex = -1;
 let analysisMode = 'cumulative';
 let lastSegmentCount = 0;
 
+let compareCenter = null;
+let compareSegments = [];
+let compareAbortController = null;
+let compareNormalizedBins = [];
+
 const h = 120;
 const r = h / 2;
 const numBins = 64;
@@ -381,6 +386,14 @@ canvas.style.width = canvas.style.height = h + 'px';
 canvas.width = canvas.height = h;
 if (window.devicePixelRatio > 1) { canvas.width = canvas.height = h * 2; ctx.scale(2, 2); }
 
+const canvas2 = document.getElementById('canvas-2');
+const ctx2 = canvas2 ? canvas2.getContext('2d') : null;
+if (canvas2) {
+  canvas2.style.width = canvas2.style.height = h + 'px';
+  canvas2.width = canvas2.height = h;
+  if (window.devicePixelRatio > 1) { canvas2.width = canvas2.height = h * 2; ctx2.scale(2, 2); }
+}
+
 function processAndDrawChart() {
     ctx.clearRect(0, 0, h, h);
 
@@ -628,6 +641,141 @@ document.getElementById('retry-btn').addEventListener('click', () => {
   triggerHybridAnalysis();
 });
 
+// --- City Comparison Mode ---
+function updateCompareStatus(state) {
+  const badge = document.getElementById('data-status-2');
+  if (!badge) return;
+  badge.className = `badge ${state}`;
+  badge.textContent = state.toUpperCase();
+}
+
+async function triggerCompareAnalysis() {
+  if (!compareCenter) return;
+
+  // FAST pass
+  compareSegments = extractLocalSegments();
+  updateCompareStatus('fast');
+  processAndDrawCompareChart();
+
+  // PRECISE pass
+  if (compareAbortController) compareAbortController.abort();
+  compareAbortController = new AbortController();
+  const signal = compareAbortController.signal;
+
+  const maxR = radii[radii.length - 1] + 1;
+  const [lng, lat] = compareCenter;
+  const query = `[out:json][timeout:25];(way["highway"](around:${maxR * 1000},${lat},${lng}););out geom;`;
+  const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
+
+  updateCompareStatus('fetching');
+  try {
+    const res = await fetch(url, { signal });
+    const data = await res.json();
+    const segs = [];
+    data.elements.forEach(el => {
+      if (el.type === 'way' && el.geometry) {
+        const coords = el.geometry.map(pt => [pt.lon, pt.lat]);
+        const isTwoWay = !(el.tags && (el.tags.oneway === 'yes' || el.tags.oneway === '1' || el.tags.oneway === '-1'));
+        for (let i = 0; i < coords.length - 1; i++) {
+          segs.push({ p1: coords[i], p2: coords[i + 1], isTwoWay });
+        }
+      }
+    });
+    compareSegments = segs;
+    updateCompareStatus('precise');
+    processAndDrawCompareChart();
+  } catch (e) {
+    if (e.name !== 'AbortError') updateCompareStatus('timeout');
+  }
+}
+
+function processAndDrawCompareChart() {
+  if (!canvas2 || !ctx2) return;
+
+  const ruler = new CheapRuler(compareCenter[1]);
+  const stackedBins = Array.from({ length: radii.length }, () => new Float64Array(numBins));
+
+  compareSegments.forEach(seg => {
+    const midPt = [(seg.p1[0] + seg.p2[0]) / 2, (seg.p1[1] + seg.p2[1]) / 2];
+    if (ruler.distance(compareCenter, midPt) > radii[radii.length - 1]) return;
+    let ringIndex = 0;
+    for (let rIdx = 0; rIdx < radii.length; rIdx++) {
+      if (ruler.distance(compareCenter, midPt) <= radii[rIdx]) { ringIndex = rIdx; break; }
+    }
+    const segBearing = ruler.bearing(seg.p1, seg.p2);
+    const distance = ruler.distance(seg.p1, seg.p2);
+    const k0 = Math.round((segBearing + 360) * numBins / 360) % numBins;
+    const k1 = Math.round((segBearing + 180) * numBins / 360) % numBins;
+    stackedBins[ringIndex][k0] += distance;
+    if (seg.isTwoWay) stackedBins[ringIndex][k1] += distance;
+  });
+
+  // Normalise (cumulative mode)
+  compareNormalizedBins = Array.from({ length: radii.length }, () => new Float64Array(numBins));
+  let maxPct = 0;
+  const sharedTotal = stackedBins.reduce((t, ring) => {
+    for (let b = 0; b < numBins; b++) t += ring[b];
+    return t;
+  }, 0);
+
+  if (sharedTotal > 0) {
+    for (let ring = 0; ring < radii.length; ring++) {
+      for (let b = 0; b < numBins; b++) {
+        let cumVal = 0;
+        for (let k = 0; k <= ring; k++) cumVal += stackedBins[k][b];
+        const pct = (cumVal / sharedTotal) * 100;
+        compareNormalizedBins[ring][b] = pct;
+        if (pct > maxPct) maxPct = pct;
+      }
+    }
+  }
+
+  // Draw on canvas2
+  ctx2.clearRect(0, 0, h * 2, h * 2);
+  ctx2.save();
+  ctx2.translate(r, r);
+
+  // Grid circles
+  ctx2.strokeStyle = 'rgba(0,0,0,0.08)'; ctx2.lineWidth = 0.5;
+  for (let g = 1; g <= 4; g++) {
+    ctx2.beginPath(); ctx2.arc(0, 0, r * (g / 4), 0, 2 * Math.PI); ctx2.stroke();
+  }
+
+  // Compass labels
+  ctx2.fillStyle = '#64748b';
+  ctx2.font = `bold ${Math.round(h * 0.09)}px Inter, system-ui, sans-serif`;
+  ctx2.textAlign = 'center'; ctx2.textBaseline = 'middle';
+  [['N',0,-(r-8)],['S',0,r-8],['E',r-8,0],['W',-(r-8),0]].forEach(([l,x,y]) => ctx2.fillText(l,x,y));
+
+  if (maxPct > 0) {
+    for (let ring = radii.length - 1; ring >= 0; ring--) {
+      ctx2.fillStyle = getRingColor(ring);
+      ctx2.globalAlpha = 0.6;
+      ctx2.beginPath(); ctx2.moveTo(0, 0);
+      for (let b = 0; b < numBins; b++) {
+        const a0 = ((b - 0.5) * 360 / numBins - 90) * Math.PI / 180;
+        const a1 = ((b + 0.5) * 360 / numBins - 90) * Math.PI / 180;
+        const pct = compareNormalizedBins[ring][b];
+        if (pct > 0) { ctx2.arc(0, 0, r * Math.sqrt(pct / maxPct), a0, a1); ctx2.lineTo(0, 0); }
+      }
+      ctx2.fill();
+    }
+  }
+  ctx2.globalAlpha = 1.0; ctx2.restore();
+
+  // Update dominant direction display
+  const outerBins2 = compareNormalizedBins[radii.length - 1];
+  const { dominant: dom2, secondary: sec2 } = computeDominantDirections(outerBins2);
+  const domEl2 = document.getElementById('dominant-value-2');
+  const secEl2 = document.getElementById('secondary-value-2');
+  if (domEl2) domEl2.textContent = dom2
+    ? `${binToCompassLabel(dom2.bins[0])} – ${binToCompassLabel(dom2.bins[1])} · ${dom2.combined.toFixed(1)}%`
+    : '—';
+  if (secEl2) secEl2.textContent = sec2
+    ? `Secondary: ${binToCompassLabel(sec2.bins[0])}–${binToCompassLabel(sec2.bins[1])}`
+    : '';
+}
+
 // --- Event Listeners ---
 map.on('load', () => {
     applyAutoCollapse();
@@ -672,6 +820,40 @@ map.on('load', () => {
       triggerHybridAnalysis();
       reverseGeocodePin(pinnedCenter);
       updateHash();
+    });
+
+    // Compare mode toggle
+    function enterCompareMode() {
+      document.getElementById('panel-compare').hidden = false;
+      document.body.classList.add('compare-mode');
+    }
+    function exitCompareMode() {
+      document.getElementById('panel-compare').hidden = true;
+      document.body.classList.remove('compare-mode');
+    }
+
+    document.getElementById('compare-btn').addEventListener('click', enterCompareMode);
+    const compareBtnPanel = document.getElementById('compare-btn-panel');
+    if (compareBtnPanel) compareBtnPanel.addEventListener('click', enterCompareMode);
+    document.getElementById('compare-close').addEventListener('click', exitCompareMode);
+
+    // Geocoder for second panel
+    const geocoderApi2 = { forwardGeocode: geocoderApi.forwardGeocode };
+    const geocoder2 = new MaplibreGeocoder(geocoderApi2, { maplibregl, marker: false });
+    const wrapper2 = document.getElementById('search-wrapper-2');
+    if (wrapper2) wrapper2.appendChild(geocoder2.onAdd(map));
+
+    geocoder2.on('result', (e) => {
+      compareCenter = e.result.center;
+      new maplibregl.Marker({ color: '#3b82f6', draggable: false })
+        .setLngLat(compareCenter).addTo(map);
+      document.getElementById('location-name-2').textContent = e.result.place_name;
+      document.getElementById('center-info-2').textContent =
+        `${compareCenter[1].toFixed(4)}°N, ${compareCenter[0].toFixed(4)}°E`;
+      if (compareCenter && pinnedCenter) {
+        map.fitBounds([pinnedCenter, compareCenter], { padding: 60 });
+      }
+      triggerCompareAnalysis();
     });
 });
 
