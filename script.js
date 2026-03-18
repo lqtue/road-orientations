@@ -517,6 +517,17 @@ function processAndDrawChart() {
         });
         if (maxPercentage === 0) { ctx.restore(); return; }
 
+        // Recompute maxPercentage as max stacked total per bin so bars stay within bounding circle
+        maxPercentage = 0;
+        for (let ring = 0; ring < radii.length; ring++) {
+            for (let b = 0; b < numBins; b++) {
+                let binTotal = 0;
+                roadTypeGroups.forEach(g => { if (activeTypeGroups.has(g.key) && normTypeBins[g.key]) binTotal += normTypeBins[g.key][ring][b]; });
+                if (binTotal > maxPercentage) maxPercentage = binTotal;
+            }
+        }
+        if (maxPercentage === 0) { ctx.restore(); return; }
+
         // Store flat tooltip data: use hovered ring or outermost
         const tooltipRing = hoveredRingIndex !== -1 ? hoveredRingIndex : radii.length - 1;
         globalTypeNorms = {};
