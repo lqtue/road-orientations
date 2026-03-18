@@ -146,6 +146,7 @@ input[type="number"] { width: 55px; padding: 5px 6px; border: 1px solid #cbd5e1;
 #data-status.fetching { background: #eab308; color: #422006; animation: pulse 1.5s infinite; }
 #data-status.precise { background: #22c55e; }
 #data-status.fast { background: #64748b; }
+#data-status.error { background: #dc2626; }
 
 #chart-tooltip {
     position: absolute; display: none; background: #1e293b; color: white;

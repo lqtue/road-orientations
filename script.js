@@ -282,6 +282,7 @@ function updateStatus(state) {
     if (state === 'fast') el.innerText = "FAST (MAP VIEW)";
     if (state === 'fetching') el.innerText = "FETCHING PRECISE DATA...";
     if (state === 'precise') el.innerText = "PRECISE (OVERPASS)";
+    if (state === 'error') el.innerText = "OVERPASS UNAVAILABLE — SHOWING MAP DATA";
 }
 
 // --- Hybrid Data Engine ---
@@ -344,7 +345,7 @@ async function fetchOverpassSegments(centerCoords, maxRadiusKm) {
         return segments;
     } catch (error) {
         if (error.name === 'AbortError') console.log('Previous fetch cancelled');
-        else console.error("Overpass fetch failed:", error);
+        else { console.error("Overpass fetch failed:", error); updateStatus('error'); }
         return null;
     }
 }
@@ -362,7 +363,7 @@ async function triggerHybridAnalysis() {
         updateStatus('precise');
         processAndDrawChart();
     } else if (!activeAbortController || !activeAbortController.signal.aborted) {
-        updateStatus('fast'); 
+        // status already set to 'error' inside fetchOverpassSegments; leave it
     }
 }
 
