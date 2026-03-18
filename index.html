@@ -25,9 +25,14 @@
                 <h3>Road Orientations</h3>
             </div>
 
-            <details class="info-panel">
+            <details class="info-panel" open>
                 <summary>How to use</summary>
                 <p>Type a city in the search bar and pick from suggestions. Or drag the pin anywhere on the map. Add rings to compare distance bands. Hover a map ring to isolate it in the chart.</p>
+            </details>
+
+            <details class="info-panel" open>
+                <summary>How to read</summary>
+                <p>Each petal = a compass bearing. Longer = more road length that way. Both modes are <strong>cumulative</strong>: each ring includes all roads from the center outward. <strong>Radii</strong>: colors are distance bands. <strong>Detail</strong>: colors are road types — toggle below. Hover chart for values; hover a map ring to isolate that band.</p>
             </details>
 
             <div class="sidebar-section">
@@ -47,14 +52,27 @@
                 <div id="road-type-list" style="display:none"></div>
             </div>
 
-            <details class="info-panel">
-                <summary>How to read</summary>
-                <p>Each petal = a compass bearing. Longer = more road length that way. Both modes are <strong>cumulative</strong>: each ring includes all roads from the center outward. <strong>Radii</strong>: colors are distance bands. <strong>Detail</strong>: colors are road types — toggle above. Hover chart for values; hover a map ring to isolate that band.</p>
-            </details>
-
-            <div class="sidebar-section last">
+            <div class="sidebar-section">
                 <h4>Center</h4>
                 <div id="center-info" class="coord-text"></div>
+            </div>
+
+            <div class="sidebar-section" id="basemap-switcher">
+                <h4>Basemap</h4>
+                <div class="basemap-cards-row">
+                    <div id="basemap-card-streets" class="basemap-card active" onclick="setBasemap('streets')">
+                        <div class="basemap-thumb streets-thumb"></div>
+                        <span>Streets</span>
+                    </div>
+                    <div id="basemap-card-satellite" class="basemap-card" onclick="setBasemap('satellite')">
+                        <div class="basemap-thumb satellite-thumb"></div>
+                        <span>Satellite</span>
+                    </div>
+                </div>
+                <div id="vec-opacity-row">
+                    <span>Map overlay</span>
+                    <input type="range" id="vec-opacity-slider" min="0" max="100" value="55">
+                </div>
             </div>
 
             <div class="sidebar-section last">
@@ -65,21 +83,6 @@
     </div>
 
     <div id="map"></div>
-
-    <div id="basemap-switcher">
-        <div id="basemap-card-streets" class="basemap-card active" onclick="setBasemap('streets')">
-            <div class="basemap-thumb streets-thumb"></div>
-            <span>Streets</span>
-        </div>
-        <div id="basemap-card-satellite" class="basemap-card" onclick="setBasemap('satellite')">
-            <div class="basemap-thumb satellite-thumb"></div>
-            <span>Satellite</span>
-        </div>
-        <div id="vec-opacity-row">
-            <span>Map</span>
-            <input type="range" id="vec-opacity-slider" min="0" max="100" value="55">
-        </div>
-    </div>
 
     <div id="map-attribution">
         <button id="attr-toggle">©</button>

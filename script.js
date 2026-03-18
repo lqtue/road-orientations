@@ -54,10 +54,15 @@ async function fetchRingPopulations() {
         try {
             const res = await fetch(`https://ringpopulationsapi.azurewebsites.net/api/globalringpopulations?latitude=${lat}&longitude=${lng}&distance_km=${radius}`);
             const data = await res.json();
-            popCache[key] = data.people;
-            ringPopulations[radius] = data.people;
+            popCache[key] = data.people ?? null;
+            ringPopulations[radius] = popCache[key];
             renderRadiiUI();
-        } catch(e) { console.error('Population fetch failed', e); }
+        } catch(e) {
+            console.error('Population fetch failed', e);
+            popCache[key] = null;
+            ringPopulations[radius] = null;
+            renderRadiiUI();
+        }
     }
 }
 
@@ -277,7 +282,7 @@ function renderRadiiUI() {
             row.style.boxShadow = `0 2px 8px ${getRingColor(i).replace('rgb', 'rgba').replace(')', ', 0.2)')}`;
         }
         const popVal = ringPopulations[radius];
-        const popText = popVal !== undefined ? formatPop(popVal) : '…';
+        const popText = popVal === undefined ? '…' : popVal === null ? 'N/A' : formatPop(popVal);
         row.innerHTML = `<div class="color-swatch" style="background-color: ${getRingColor(i)}"></div>
             <input type="number" value="${radius}" step="0.5" min="0.5" data-index="${i}">
             <span class="unit-label">km</span>
