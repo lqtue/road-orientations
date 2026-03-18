@@ -70,3 +70,52 @@ describe('binToCompassLabel', () => {
   it('maps bin 32 to S', () => expect(binToCompassLabel(32)).toBe('S'));
   it('maps bin 48 to W', () => expect(binToCompassLabel(48)).toBe('W'));
 });
+
+// --- Permalink encode/decode ---
+function encodeHash({ lat, lng, zoom, radii, mode, explainerOpen }) {
+  const r = radii.join('-');
+  const e = explainerOpen ? '' : ',0';
+  return `#${lat.toFixed(4)},${lng.toFixed(4)},${zoom},${r},${mode}${e}`;
+}
+
+function decodeHash(hash) {
+  if (!hash || hash.length < 2) return null;
+  const parts = hash.slice(1).split(',');
+  if (parts.length < 5) return null;
+  try {
+    return {
+      lat: parseFloat(parts[0]),
+      lng: parseFloat(parts[1]),
+      zoom: parseInt(parts[2], 10),
+      radii: parts[3].split('-').map(Number),
+      mode: parts[4],
+      explainerOpen: parts[5] !== '0',
+    };
+  } catch { return null; }
+}
+
+describe('permalink encode/decode', () => {
+  it('round-trips correctly', () => {
+    const state = { lat: 10.8231, lng: 106.6297, zoom: 12, radii: [1, 3, 5], mode: 'cumulative', explainerOpen: true };
+    const hash = encodeHash(state);
+    const decoded = decodeHash(hash);
+    expect(decoded.lat).toBeCloseTo(10.8231, 4);
+    expect(decoded.lng).toBeCloseTo(106.6297, 4);
+    expect(decoded.zoom).toBe(12);
+    expect(decoded.radii).toEqual([1, 3, 5]);
+    expect(decoded.mode).toBe('cumulative');
+    expect(decoded.explainerOpen).toBe(true);
+  });
+
+  it('encodes explainer=0 only when collapsed', () => {
+    const collapsed = encodeHash({ lat: 48.8566, lng: 2.3522, zoom: 10, radii: [1], mode: 'cumulative', explainerOpen: false });
+    expect(collapsed.endsWith(',0')).toBe(true);
+    const open = encodeHash({ lat: 48.8566, lng: 2.3522, zoom: 10, radii: [1], mode: 'cumulative', explainerOpen: true });
+    expect(open.endsWith(',0')).toBe(false);
+  });
+
+  it('returns null for malformed hash', () => {
+    expect(decodeHash('#bad')).toBeNull();
+    expect(decodeHash('')).toBeNull();
+  });
+});

@@ -94,6 +94,7 @@ geocoder.on('result', (e) => {
     updateCenterInfo();
     updateMapRings();
     triggerHybridAnalysis();
+    updateHash();
 });
 
 const CITY_PRESETS = {
@@ -130,6 +131,7 @@ document.getElementById('preset-menu').addEventListener('click', (e) => {
   updateCenterInfo();
   updateMapRings();
   triggerHybridAnalysis();
+  updateHash();
 });
 
 async function reverseGeocodePin(lngLat) {
@@ -164,6 +166,7 @@ centerMarker.on('dragend', () => {
   updateMapRings();
   triggerHybridAnalysis();
   reverseGeocodePin(pinnedCenter);
+  updateHash();
 });
 
 function updateCenterInfo() {
@@ -171,8 +174,8 @@ function updateCenterInfo() {
 }
 
 // --- UI Setup ---
-document.getElementById('mode-cumulative').onclick = (e) => { analysisMode = 'cumulative'; updateUIButtons(e.target); processAndDrawChart(); renderBreakdown(); };
-document.getElementById('mode-ring-only').onclick = (e) => { analysisMode = 'ring-only'; updateUIButtons(e.target); processAndDrawChart(); renderBreakdown(); };
+document.getElementById('mode-cumulative').onclick = (e) => { analysisMode = 'cumulative'; updateUIButtons(e.target); processAndDrawChart(); renderBreakdown(); updateHash(); };
+document.getElementById('mode-ring-only').onclick = (e) => { analysisMode = 'ring-only'; updateUIButtons(e.target); processAndDrawChart(); renderBreakdown(); updateHash(); };
 
 function updateUIButtons(el) {
     document.querySelectorAll('.mode-pill').forEach(b => b.classList.remove('active'));
@@ -198,7 +201,7 @@ function renderRadiiUI() {
 
         row.querySelector('input').onchange = (e) => {
             let val = parseFloat(e.target.value);
-            if (val > 0) { radii[i] = val; radii.sort((a, b) => a - b); renderRadiiUI(); triggerHybridAnalysis(); updateMapRings(); }
+            if (val > 0) { radii[i] = val; radii.sort((a, b) => a - b); renderRadiiUI(); triggerHybridAnalysis(); updateMapRings(); updateHash(); }
         };
         row.querySelector('.remove-btn').onclick = () => {
             if (radii.length > 1) { radii.splice(i, 1); hoveredRingIndex = -1; renderRadiiUI(); triggerHybridAnalysis(); updateMapRings(); }
@@ -207,7 +210,7 @@ function renderRadiiUI() {
     });
 }
 
-document.getElementById('add-radius-btn').onclick = () => { radii.push(radii[radii.length - 1] + 2.0); renderRadiiUI(); triggerHybridAnalysis(); updateMapRings(); };
+document.getElementById('add-radius-btn').onclick = () => { radii.push(radii[radii.length - 1] + 2.0); renderRadiiUI(); triggerHybridAnalysis(); updateMapRings(); updateHash(); };
 
 function renderBreakdown() {
   const list = document.getElementById('breakdown-list');
@@ -564,10 +567,65 @@ function hideTooltip() {
     document.getElementById('chart-tooltip').style.display = 'none';
 }
 
+// --- Permalink ---
+function encodeHash({ lat, lng, zoom, radii, mode, explainerOpen }) {
+  const r = radii.join('-');
+  const e = explainerOpen ? '' : ',0';
+  return `#${lat.toFixed(4)},${lng.toFixed(4)},${zoom},${r},${mode}${e}`;
+}
+
+function decodeHash(hash) {
+  if (!hash || hash.length < 2) return null;
+  const parts = hash.slice(1).split(',');
+  if (parts.length < 5) return null;
+  try {
+    return {
+      lat: parseFloat(parts[0]),
+      lng: parseFloat(parts[1]),
+      zoom: parseInt(parts[2], 10),
+      radii: parts[3].split('-').map(Number),
+      mode: parts[4],
+      explainerOpen: parts[5] !== '0',
+    };
+  } catch { return null; }
+}
+
+function updateHash() {
+  const explainer = document.getElementById('explainer');
+  const explainerOpen = explainer ? explainer.hasAttribute('open') : true;
+  window.location.hash = encodeHash({
+    lat: pinnedCenter[1],
+    lng: pinnedCenter[0],
+    zoom: Math.round(map.getZoom()),
+    radii,
+    mode: analysisMode,
+    explainerOpen,
+  });
+}
+
 // --- Event Listeners ---
 map.on('load', () => {
     applyAutoCollapse();
     window.addEventListener('resize', applyAutoCollapse);
+
+    const saved = decodeHash(window.location.hash);
+    if (saved) {
+      pinnedCenter = [saved.lng, saved.lat];
+      centerMarker.setLngLat(pinnedCenter);
+      map.setCenter(pinnedCenter);
+      map.setZoom(saved.zoom);
+      radii = saved.radii;
+      analysisMode = saved.mode;
+      const explainerEl = document.getElementById('explainer');
+      if (explainerEl && !saved.explainerOpen) {
+        explainerEl.removeAttribute('open');
+      }
+      document.querySelectorAll('.mode-pill').forEach(b => b.classList.remove('active'));
+      const activeId = analysisMode === 'cumulative' ? 'mode-cumulative' : 'mode-ring-only';
+      const activeBtn = document.getElementById(activeId);
+      if (activeBtn) activeBtn.classList.add('active');
+    }
+
     updateCenterInfo(); renderRadiiUI(); updateMapRings();
     setTimeout(() => { triggerHybridAnalysis(); }, 800);
 
@@ -588,6 +646,7 @@ map.on('load', () => {
       updateMapRings();
       triggerHybridAnalysis();
       reverseGeocodePin(pinnedCenter);
+      updateHash();
     });
 });
 
@@ -654,4 +713,24 @@ canvasContainer.addEventListener('mouseleave', () => {
     renderRadiiUI(); processAndDrawChart(); renderBreakdown(); updateMapRings();
   }
   hideTooltip();
+});
+
+document.getElementById('share-btn').addEventListener('click', async () => {
+  updateHash();
+  const url = window.location.href;
+  try {
+    await navigator.clipboard.writeText(url);
+    const btn = document.getElementById('share-btn');
+    const original = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = original; }, 2000);
+  } catch {
+    const fallback = document.getElementById('share-fallback');
+    const input = document.getElementById('share-url-input');
+    if (fallback && input) {
+      fallback.hidden = false;
+      input.value = url;
+      input.select();
+    }
+  }
 });
