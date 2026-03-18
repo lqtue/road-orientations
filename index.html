@@ -59,7 +59,23 @@
         <details id="explainer" open>
           <summary>ℹ︎ How to read this chart</summary>
           <div class="explainer-body">
-            <!-- SVG added in Task 6 -->
+            <svg width="56" height="56" viewBox="-28 -28 56 56" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <!-- Background circle -->
+              <circle cx="0" cy="0" r="27" fill="none" stroke="#bfdbfe" stroke-width="1"/>
+              <!-- Long petal NE -->
+              <path d="M0,0 L15,-22 A24,24,0,0,1,22,-15 Z" fill="rgba(59,130,246,0.6)"/>
+              <!-- Long petal SW (opposite) -->
+              <path d="M0,0 L-15,22 A24,24,0,0,1,-22,15 Z" fill="rgba(59,130,246,0.6)"/>
+              <!-- Short petal NW -->
+              <path d="M0,0 L-8,-10 A11,11,0,0,1,-10,-8 Z" fill="rgba(59,130,246,0.35)"/>
+              <!-- Short petal SE (opposite) -->
+              <path d="M0,0 L8,10 A11,11,0,0,1,10,8 Z" fill="rgba(59,130,246,0.35)"/>
+              <!-- Compass labels -->
+              <text x="0" y="-29" text-anchor="middle" font-size="6" fill="#1e40af" font-family="system-ui">N</text>
+              <text x="0" y="34" text-anchor="middle" font-size="6" fill="#93c5fd" font-family="system-ui">S</text>
+              <text x="29" y="2" text-anchor="start" font-size="6" fill="#93c5fd" font-family="system-ui">E</text>
+              <text x="-29" y="2" text-anchor="end" font-size="6" fill="#93c5fd" font-family="system-ui">W</text>
+            </svg>
             <p>Each petal shows how much total road length faces that compass direction. Longer petal = more roads oriented that way. Hover for exact percentages.</p>
           </div>
         </details>
