@@ -62,8 +62,8 @@ const geocoderApi = {
             const geojson = await response.json();
             for (let feature of geojson.features) {
                 let center = [
-                    feature.bbox[0] + (feature.bbox[2] - feature.bbox[0]) / 2,
-                    feature.bbox[1] + (feature.bbox[3] - feature.bbox[1]) / 2
+                    parseFloat(feature.properties.lon),
+                    parseFloat(feature.properties.lat)
                 ];
                 features.push({
                     type: 'Feature', geometry: { type: 'Point', coordinates: center },
