@@ -108,8 +108,8 @@ function updateCenterInfo() {
 }
 
 // --- UI Setup ---
-document.getElementById('mode-cumulative').onclick = (e) => { analysisMode = 'cumulative'; updateUIButtons(e.target); processAndDrawChart(); };
-document.getElementById('mode-ring-only').onclick = (e) => { analysisMode = 'ring-only'; updateUIButtons(e.target); processAndDrawChart(); };
+document.getElementById('mode-cumulative').onclick = (e) => { analysisMode = 'cumulative'; updateUIButtons(e.target); processAndDrawChart(); renderBreakdown(); };
+document.getElementById('mode-ring-only').onclick = (e) => { analysisMode = 'ring-only'; updateUIButtons(e.target); processAndDrawChart(); renderBreakdown(); };
 
 function updateUIButtons(el) {
     document.querySelectorAll('.mode-pill').forEach(b => b.classList.remove('active'));
@@ -145,6 +145,54 @@ function renderRadiiUI() {
 }
 
 document.getElementById('add-radius-btn').onclick = () => { radii.push(radii[radii.length - 1] + 2.0); renderRadiiUI(); triggerHybridAnalysis(); updateMapRings(); };
+
+function renderBreakdown() {
+  const list = document.getElementById('breakdown-list');
+  const toggle = document.getElementById('breakdown-toggle');
+  if (!list) return;
+  list.innerHTML = '';
+
+  const MAX_VISIBLE = 3;
+  const showAll = list.dataset.expanded === 'true';
+
+  radii.forEach((radius, i) => {
+    const bins = globalNormalizedBins[i];
+    const row = document.createElement('div');
+    row.className = 'breakdown-row';
+    if (hoveredRingIndex === i) row.classList.add('highlighted');
+
+    let label = '—';
+    if (bins) {
+      const { dominant } = computeDominantDirections(bins);
+      if (dominant) {
+        label = `${binToCompassLabel(dominant.bins[0])}–${binToCompassLabel(dominant.bins[1])} · ${dominant.combined.toFixed(0)}%`;
+      }
+    }
+
+    row.innerHTML = `
+      <span class="swatch" style="background:${getRingColor(i)}"></span>
+      <span>${radius} km</span>
+      <span class="ring-stat">${label}</span>`;
+
+    if (i >= MAX_VISIBLE && !showAll) {
+      row.style.display = 'none';
+    }
+    list.appendChild(row);
+  });
+
+  if (toggle) {
+    if (radii.length > MAX_VISIBLE) {
+      toggle.hidden = false;
+      toggle.textContent = showAll ? 'Show less ↑' : 'Show all ↓';
+      toggle.onclick = () => {
+        list.dataset.expanded = showAll ? 'false' : 'true';
+        renderBreakdown();
+      };
+    } else {
+      toggle.hidden = true;
+    }
+  }
+}
 
 function updateStatus(state) {
     const el = document.getElementById('data-status');
@@ -221,6 +269,7 @@ async function triggerHybridAnalysis() {
     currentSegments = extractLocalSegments();
     updateStatus('fast');
     processAndDrawChart();
+    renderBreakdown();
 
     const fetchRadius = radii[radii.length - 1] + 1;
     const preciseSegments = await fetchOverpassSegments(pinnedCenter, fetchRadius);
@@ -229,6 +278,7 @@ async function triggerHybridAnalysis() {
         currentSegments = preciseSegments;
         updateStatus('precise');
         processAndDrawChart();
+        renderBreakdown();
     } else if (!activeAbortController || !activeAbortController.signal.aborted) {
         updateStatus('fast');
     }
@@ -451,11 +501,11 @@ map.on('load', () => {
     map.on('mousemove', 'analysis-rings-fill', (e) => {
         if (e.features.length > 0) {
             const idx = e.features[0].properties.ringIndex;
-            if (idx !== hoveredRingIndex) { hoveredRingIndex = idx; map.getCanvas().style.cursor = 'pointer'; renderRadiiUI(); processAndDrawChart(); updateMapRings(); }
+            if (idx !== hoveredRingIndex) { hoveredRingIndex = idx; map.getCanvas().style.cursor = 'pointer'; renderRadiiUI(); processAndDrawChart(); renderBreakdown(); updateMapRings(); }
         }
     });
     map.on('mouseleave', 'analysis-rings-fill', () => {
-        if (hoveredRingIndex !== -1) { hoveredRingIndex = -1; map.getCanvas().style.cursor = ''; renderRadiiUI(); processAndDrawChart(); updateMapRings(); }
+        if (hoveredRingIndex !== -1) { hoveredRingIndex = -1; map.getCanvas().style.cursor = ''; renderRadiiUI(); processAndDrawChart(); renderBreakdown(); updateMapRings(); }
     });
 });
 
@@ -463,6 +513,7 @@ map.on('moveend', () => {
     if (document.getElementById('data-status').className === 'fast') {
         currentSegments = extractLocalSegments();
         processAndDrawChart();
+        renderBreakdown();
     }
 });
 
@@ -477,7 +528,7 @@ canvasContainer.addEventListener('mousemove', (e) => {
     const dist = Math.sqrt(mx * mx + my * my);
 
     if (dist > r) {
-        if (hoveredRingIndex !== -1) { hoveredRingIndex = -1; renderRadiiUI(); processAndDrawChart(); updateMapRings(); }
+        if (hoveredRingIndex !== -1) { hoveredRingIndex = -1; renderRadiiUI(); processAndDrawChart(); renderBreakdown(); updateMapRings(); }
         hideTooltip();
         return;
     }
@@ -485,7 +536,7 @@ canvasContainer.addEventListener('mousemove', (e) => {
     const bestRing = Math.min(Math.floor((dist / r) * radii.length), radii.length - 1);
     if (bestRing !== hoveredRingIndex) {
         hoveredRingIndex = bestRing;
-        renderRadiiUI(); processAndDrawChart(); updateMapRings();
+        renderRadiiUI(); processAndDrawChart(); renderBreakdown(); updateMapRings();
     }
 
     if (globalNormalizedBins.length > 0 && hoveredRingIndex !== -1) {
@@ -514,6 +565,6 @@ canvasContainer.addEventListener('mousemove', (e) => {
 });
 
 canvasContainer.addEventListener('mouseleave', () => {
-    if (hoveredRingIndex !== -1) { hoveredRingIndex = -1; renderRadiiUI(); processAndDrawChart(); updateMapRings(); }
+    if (hoveredRingIndex !== -1) { hoveredRingIndex = -1; renderRadiiUI(); processAndDrawChart(); renderBreakdown(); updateMapRings(); }
     hideTooltip();
 });
