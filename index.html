@@ -42,7 +42,6 @@
         </ul>
       </div>
     </div>
-    <button id="compare-btn" class="compare-btn">⚖ Compare</button>
   </div>
 
   <!-- Main two-column layout -->
@@ -129,9 +128,7 @@
       <!-- Section 7: Actions -->
       <div class="panel-section" id="actions-section">
         <div class="actions">
-          <button id="export-btn" class="btn btn-export">⬇ Export</button>
           <button id="share-btn" class="btn btn-share">🔗 Share</button>
-          <button id="compare-btn-panel" class="btn btn-compare">⚖ Compare</button>
         </div>
         <div id="share-fallback" hidden>
           <input id="share-url-input" type="text" readonly>
@@ -139,42 +136,6 @@
       </div>
 
     </div><!-- /#panel -->
-
-    <!-- Comparison panel (initially hidden) -->
-    <div id="panel-compare" hidden>
-      <div class="compare-vs">vs</div>
-      <button id="compare-close">×</button>
-
-      <div class="panel-section">
-        <div id="location-name-2">—</div>
-        <span id="data-status-2" class="badge fast">FAST</span>
-        <div id="center-info-2" class="coord-text"></div>
-      </div>
-
-      <div class="panel-section" id="chart-section-2">
-        <div id="chart-row-2">
-          <div id="canvas-container-2">
-            <canvas id="canvas-2"></canvas>
-          </div>
-          <div id="dominant-block-2">
-            <div id="dominant-card-2">
-              <div class="dom-label">Dominant</div>
-              <div id="dominant-value-2">—</div>
-              <div id="secondary-value-2"></div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="panel-section">
-        <div id="search-wrapper-2"></div>
-      </div>
-
-      <div class="panel-section">
-        <div class="data-source">Source: OpenStreetMap via Overpass API</div>
-        <div id="data-source-line2-2" class="data-source"></div>
-      </div>
-    </div><!-- /#panel-compare -->
 
   </div><!-- /#main -->
 

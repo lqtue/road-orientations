@@ -1,7 +1,6 @@
 :root {
   --topbar-h: 48px;
   --panel-w: 300px;
-  --panel-compare-w: 250px;
   --surface: rgba(255,255,255,0.97);
   --border: rgba(0,0,0,0.08);
   --text-primary: #1e293b;
@@ -101,19 +100,6 @@ body {
 }
 #preset-menu li:hover { background: #f8fafc; }
 
-.compare-btn {
-  margin-left: auto;
-  padding: 5px 14px;
-  background: #1e293b;
-  color: white;
-  border: none;
-  border-radius: 6px;
-  font-size: 0.78rem;
-  cursor: pointer;
-  font-family: inherit;
-  font-weight: 500;
-  white-space: nowrap;
-}
 
 /* ── Main two-column ── */
 #main {
@@ -352,9 +338,7 @@ input[type="number"] {
   font-weight: 600;
   font-family: inherit;
 }
-.btn-export { background: #1e293b; color: white; }
 .btn-share { background: #3b82f6; color: white; }
-.btn-compare { background: #f1f5f9; color: var(--text-secondary); border: 1px solid var(--border); }
 
 #share-fallback { margin-top: 8px; }
 #share-url-input {
@@ -385,55 +369,6 @@ input[type="number"] {
 .tooltip-val { font-size: 1.05rem; font-weight: 700; margin-top: 2px; }
 .tooltip-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
 
-/* ── Comparison panel ── */
-#panel-compare {
-  width: var(--panel-compare-w);
-  flex-shrink: 0;
-  background: white;
-  border-left: 1px solid var(--border);
-  position: relative;
-  display: none;
-  flex-direction: column;
-  overflow: hidden;
-}
-#panel-compare:not([hidden]) {
-  display: flex;
-}
-.compare-vs {
-  position: absolute;
-  left: -14px;
-  top: 50%;
-  transform: translateY(-50%);
-  background: white;
-  border: 1px solid var(--border);
-  border-radius: 50%;
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.65rem;
-  font-weight: 700;
-  color: var(--text-secondary);
-  z-index: 5;
-}
-#compare-close {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  background: none;
-  border: none;
-  font-size: 1rem;
-  cursor: pointer;
-  color: var(--text-secondary);
-  z-index: 5;
-}
-
-/* Comparison mode: shrink primary panel */
-body.compare-mode #panel { width: var(--panel-compare-w); }
-body.compare-mode #panel .panel-section { padding: 8px 10px; }
-body.compare-mode .mode-pills,
-body.compare-mode .preset-dropdown-wrap { display: none; }
 
 /* ── Geocoder overrides ── */
 .maplibregl-ctrl-geocoder {
