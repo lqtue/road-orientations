@@ -96,6 +96,42 @@ geocoder.on('result', (e) => {
     triggerHybridAnalysis();
 });
 
+const CITY_PRESETS = {
+  manhattan:  { name: 'Manhattan',  center: [-73.9840, 40.7549], zoom: 13 },
+  paris:      { name: 'Paris',      center: [2.3522,   48.8566], zoom: 13 },
+  barcelona:  { name: 'Barcelona',  center: [2.1734,   41.3851], zoom: 13 },
+  tokyo:      { name: 'Tokyo',      center: [139.6503, 35.6762], zoom: 13 },
+  hcmc:       { name: 'HCMC',       center: [106.6297, 10.8231], zoom: 12 },
+};
+
+// Toggle preset dropdown visibility
+document.getElementById('preset-trigger').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const menu = document.getElementById('preset-menu');
+  menu.hidden = !menu.hidden;
+});
+
+// Close dropdown when clicking outside
+document.addEventListener('click', () => {
+  document.getElementById('preset-menu').hidden = true;
+});
+
+// Handle preset selection
+document.getElementById('preset-menu').addEventListener('click', (e) => {
+  const li = e.target.closest('li');
+  if (!li) return;
+  const preset = CITY_PRESETS[li.dataset.city];
+  if (!preset) return;
+  document.getElementById('preset-menu').hidden = true;
+  pinnedCenter = preset.center;
+  centerMarker.setLngLat(pinnedCenter);
+  map.flyTo({ center: pinnedCenter, zoom: preset.zoom });
+  document.getElementById('location-name').textContent = preset.name;
+  updateCenterInfo();
+  updateMapRings();
+  triggerHybridAnalysis();
+});
+
 centerMarker.on('dragend', () => {
     const lngLat = centerMarker.getLngLat();
     pinnedCenter = [lngLat.lng, lngLat.lat];
