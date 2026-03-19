@@ -51,13 +51,17 @@ async function fetchRingPopulations() {
             renderRadiiUI();
             continue;
         }
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
         try {
-            const res = await fetch(`https://ringpopulationsapi.azurewebsites.net/api/globalringpopulations?latitude=${lat}&longitude=${lng}&distance_km=${radius}`);
+            const res = await fetch(`https://ringpopulationsapi.azurewebsites.net/api/globalringpopulations?latitude=${lat}&longitude=${lng}&distance_km=${radius}`, { signal: controller.signal });
+            clearTimeout(timeoutId);
             const data = await res.json();
-            popCache[key] = data.people ?? null;
+            popCache[key] = data.people ?? data.population ?? null;
             ringPopulations[radius] = popCache[key];
             renderRadiiUI();
         } catch(e) {
+            clearTimeout(timeoutId);
             console.error('Population fetch failed', e);
             popCache[key] = null;
             ringPopulations[radius] = null;

@@ -58,7 +58,7 @@ h4 { margin: 0 0 10px 0; font-size: 0.75rem; text-transform: uppercase; letter-s
 .color-swatch { width: 12px; height: 12px; border-radius: 50%; margin-right: 10px; flex-shrink: 0; }
 input[type="number"] { width: 55px; padding: 5px 6px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.85rem; outline: none; margin-right: 6px; }
 .unit-label { font-size: 0.8rem; color: var(--text-secondary); }
-.ring-pop { font-size: 0.72rem; color: var(--text-secondary); margin-left: 6px; margin-right: auto; opacity: 0.7; }
+.ring-pop { font-size: 0.75rem; color: var(--text-secondary); margin-left: 6px; margin-right: auto; }
 .remove-btn { color: #ef4444; opacity: 0.4; padding: 2px 6px; border: none; background: none; cursor: pointer; font-weight: bold; }
 .remove-btn:hover { opacity: 1; }
 .add-btn { width: 100%; padding: 8px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: var(--radius-md); color: #3b82f6; cursor: pointer; font-size: 0.85rem; }
@@ -197,3 +197,30 @@ input[type="number"] { width: 55px; padding: 5px 6px; border: 1px solid #cbd5e1;
 #attr-text a:hover { text-decoration: underline; }
 
 @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.7; } 100% { opacity: 1; } }
+
+/* Mobile layout */
+@media (max-width: 600px) {
+    :root { --sidebar-width: 100vw; }
+
+    /* Sidebar overlays the map — don't push map on mobile */
+    body.sidebar-open #map { left: 0; }
+
+    /* Close button (✕) moves to top-right when sidebar fills screen */
+    body.sidebar-open #sidebar-toggle { left: auto; right: 12px; }
+
+    /* Search bar sits to the right of the toggle button */
+    #search-container {
+        left: 56px;
+        transform: none;
+        width: calc(100vw - 76px);
+        max-width: none;
+    }
+
+    /* Scale chart down so it doesn't dominate the map */
+    #chart-area {
+        transform-origin: bottom right;
+        transform: scale(0.72);
+        bottom: 8px;
+        right: 8px;
+    }
+}
