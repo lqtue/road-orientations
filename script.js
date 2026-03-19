@@ -1,4 +1,4 @@
-// --- Cohen-Sutherland Line Clipping (For local vector data) ---
+// --- Cohen-Sutherland Line Clipping ---
 function lineclip(points, bbox, result) {
     var len = points.length, codeA = bitCode(points[0], bbox), part = [], i, a, b, codeB, lastCode;
     if (!result) result = [];
@@ -29,13 +29,16 @@ let currentSegments = [];
 let activeAbortController = null;
 
 // --- Population ---
-const popCache = {}; // key: "lat,lng,radius" → people count
-let ringPopulations = {}; // key: radius → people count (current center)
+const popCache = {};
+let ringPopulations = {};
 
 // --- Ring metrics (computed from road segments) ---
-let ringEntropies = [];   // normalized Shannon entropy [0,1] per ring (cumulative)
-let ringDensities = [];   // street density km/km² per ring (cumulative)
-let lastMetricsKey = '';  // prevents redundant DOM updates on hover redraws
+let ringEntropies = [];
+let ringDensities = [];
+let lastMetricsKey = '';
+
+// --- Tab state ---
+let activeTab = 'roads';
 
 function formatPop(n) {
     if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
@@ -43,9 +46,23 @@ function formatPop(n) {
     return String(n);
 }
 
+function fmtR(r) { return r % 1 === 0 ? r : r.toFixed(1); }
+
+// --- Tab switching ---
+function switchTab(id, btn) {
+    activeTab = id;
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.viz-panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('tab-' + id).classList.add('active');
+    document.getElementById('viz-' + id).classList.add('active');
+    btn.classList.add('active');
+}
+
+// --- Population fetch ---
 async function fetchRingPopulations() {
     ringPopulations = {};
-    renderRadiiUI();
+    renderPeopleUI();
     const lat = pinnedCenter[1].toFixed(4);
     const lng = pinnedCenter[0].toFixed(4);
     const snapshot = [...radii];
@@ -62,18 +79,17 @@ async function fetchRingPopulations() {
                 { signal: controller.signal }
             );
             clearTimeout(timeoutId);
-            allData = await res.json(); // array of { distance, people, ... }
+            allData = await res.json();
             popCache[cacheKey] = allData;
         } catch(e) {
             clearTimeout(timeoutId);
             console.error('Population fetch failed', e);
             snapshot.forEach(r => { ringPopulations[r] = null; });
-            renderRadiiUI();
+            renderPeopleUI();
             return;
         }
     }
 
-    // API returns one entry per integer km up to maxRadius — match each radius to nearest
     snapshot.forEach(radius => {
         const target = Math.round(radius);
         const entry = Array.isArray(allData)
@@ -86,19 +102,373 @@ async function fetchRingPopulations() {
             rail: entry.railStops || 0
         } : null;
     });
-    renderRadiiUI();
+    renderPeopleUI();
 }
 
-// Global storage for tooltip math
-let globalNormalizedBins = []; // radii mode: indexed by ring
-let globalTypeNorms = {};      // type mode: keyed by type group
+// --- POI Categories (7 essential urban service types, OSM-based) ---
+const poiCategories = [
+    { key: 'food',     label: 'Food & drink',  icon: '🍽', bg: '#fef3c7', color: '#f59e0b',
+      test: t => (t.amenity && new Set(['restaurant','cafe','fast_food','bar','pub','food_court','ice_cream','biergarten']).has(t.amenity)) ||
+                 (t.shop   && new Set(['supermarket','convenience','bakery','butcher','greengrocer','deli','marketplace']).has(t.shop)) },
+    { key: 'health',   label: 'Health',         icon: '🏥', bg: '#fee2e2', color: '#f87171',
+      test: t => t.amenity && new Set(['hospital','clinic','pharmacy','doctors','dentist','nursing_home']).has(t.amenity) },
+    { key: 'education',label: 'Education',      icon: '🏫', bg: '#f3e8ff', color: '#a78bfa',
+      test: t => t.amenity && new Set(['school','university','college','kindergarten','library']).has(t.amenity) },
+    { key: 'green',    label: 'Green space',    icon: '🌳', bg: '#dcfce7', color: '#22c55e',
+      test: t => t.leisure && new Set(['park','garden','nature_reserve','playground','pitch']).has(t.leisure) },
+    { key: 'retail',   label: 'Retail',         icon: '🛒', bg: '#dbeafe', color: '#3b82f6',
+      test: t => t.shop && !new Set(['supermarket','convenience','bakery','butcher','greengrocer','deli','marketplace','no']).has(t.shop) },
+    { key: 'transit',  label: 'Transit',        icon: '🚌', bg: '#d1fae5', color: '#10b981',
+      test: t => t.public_transport || t.highway === 'bus_stop' ||
+                 (t.railway && new Set(['station','tram_stop','subway_entrance','halt']).has(t.railway)) },
+    { key: 'active',   label: 'Active living',  icon: '⚽', bg: '#ffedd5', color: '#f97316',
+      test: t => t.leisure && new Set(['fitness_centre','sports_centre','swimming_pool','track','stadium','sports_hall']).has(t.leisure) },
+];
+
+const poiCache = {};
+let currentPOINodes = [];
+let poiRingCounts = [];   // cached per-ring counts, recomputed when nodes change
+let hoveredPOIRing = -1;
+let poiAbortController = null;
+
+// --- People canvas ---
+const peopleCanvas = document.getElementById('people-canvas');
+const peopleCtx = peopleCanvas.getContext('2d');
+const vizH = 180;
+peopleCanvas.style.width = peopleCanvas.style.height = vizH + 'px';
+peopleCanvas.width = peopleCanvas.height = vizH;
+if (window.devicePixelRatio > 1) {
+    peopleCanvas.width = peopleCanvas.height = vizH * window.devicePixelRatio;
+    peopleCtx.scale(window.devicePixelRatio, window.devicePixelRatio);
+}
+
+// --- POI canvas ---
+const poiCanvas = document.getElementById('poi-canvas');
+const poiCtx = poiCanvas.getContext('2d');
+poiCanvas.style.width = poiCanvas.style.height = vizH + 'px';
+poiCanvas.width = poiCanvas.height = vizH;
+if (window.devicePixelRatio > 1) {
+    poiCanvas.width = poiCanvas.height = vizH * window.devicePixelRatio;
+    poiCtx.scale(window.devicePixelRatio, window.devicePixelRatio);
+}
+
+function drawPeopleViz() {
+    const vr = vizH / 2;
+    peopleCtx.clearRect(0, 0, peopleCanvas.width, peopleCanvas.height);
+    const pops = radii.map(rad => ringPopulations[rad]?.people || 0);
+    const maxPop = Math.max(...pops, 1);
+
+    peopleCtx.save();
+    peopleCtx.translate(vr, vr);
+
+    // grid circles
+    peopleCtx.strokeStyle = 'rgba(0,0,0,0.07)'; peopleCtx.lineWidth = 0.5;
+    for (let g = 1; g <= 4; g++) {
+        peopleCtx.beginPath(); peopleCtx.arc(0, 0, vr * (g / 4), 0, 2 * Math.PI); peopleCtx.stroke();
+    }
+
+    // Concentric filled discs — outermost first, innermost on top
+    // radius ∝ sqrt(population) so area ∝ population
+    for (let i = radii.length - 1; i >= 0; i--) {
+        const pop = pops[i];
+        if (!pop) continue;
+        const discR = (vr - 4) * Math.sqrt(pop / maxPop);
+        const color = getRingColor(i);
+        const isHov = hoveredRingIndex === -1 || hoveredRingIndex === i;
+        peopleCtx.beginPath();
+        peopleCtx.arc(0, 0, discR, 0, 2 * Math.PI);
+        peopleCtx.fillStyle = color;
+        peopleCtx.globalAlpha = isHov ? (hoveredRingIndex !== -1 ? 0.75 : 0.55) : 0.12;
+        peopleCtx.fill();
+        peopleCtx.globalAlpha = isHov ? 0.9 : 0.2;
+        peopleCtx.strokeStyle = color; peopleCtx.lineWidth = 1.5;
+        peopleCtx.stroke();
+    }
+
+    peopleCtx.globalAlpha = 1;
+    peopleCtx.restore();
+}
+
+function drawPOIViz() {
+    const vr = vizH / 2;
+    poiCtx.clearRect(0, 0, poiCanvas.width, poiCanvas.height);
+    if (!poiRingCounts.length) return;
+
+    const n = poiCategories.length;
+    const angleStep = (2 * Math.PI) / n;
+    const maxCount = Math.max(...poiRingCounts.flatMap(c => poiCategories.map(cat => c[cat.key])), 1);
+    const plotR = vr - 22; // leave room for icons
+
+    poiCtx.save();
+    poiCtx.translate(vr, vr);
+
+    // grid
+    poiCtx.strokeStyle = 'rgba(0,0,0,0.07)'; poiCtx.lineWidth = 0.5;
+    for (let g = 1; g <= 4; g++) {
+        poiCtx.beginPath();
+        for (let i = 0; i < n; i++) {
+            const a = i * angleStep - Math.PI / 2;
+            const rg = plotR * (g / 4);
+            i === 0 ? poiCtx.moveTo(rg * Math.cos(a), rg * Math.sin(a))
+                    : poiCtx.lineTo(rg * Math.cos(a), rg * Math.sin(a));
+        }
+        poiCtx.closePath(); poiCtx.stroke();
+    }
+    // axes
+    for (let i = 0; i < n; i++) {
+        const a = i * angleStep - Math.PI / 2;
+        poiCtx.beginPath();
+        poiCtx.moveTo(0, 0);
+        poiCtx.lineTo(plotR * Math.cos(a), plotR * Math.sin(a));
+        poiCtx.stroke();
+    }
+
+    // polygons — outer to inner
+    for (let ri = radii.length - 1; ri >= 0; ri--) {
+        const counts = poiRingCounts[ri];
+        const color = getRingColor(ri);
+        const isHov = hoveredRingIndex === -1 || hoveredRingIndex === ri;
+        poiCtx.beginPath();
+        for (let i = 0; i < n; i++) {
+            const a = i * angleStep - Math.PI / 2;
+            const val = counts[poiCategories[i].key];
+            const pr = plotR * Math.sqrt(val / maxCount);
+            i === 0 ? poiCtx.moveTo(pr * Math.cos(a), pr * Math.sin(a))
+                    : poiCtx.lineTo(pr * Math.cos(a), pr * Math.sin(a));
+        }
+        poiCtx.closePath();
+        poiCtx.fillStyle = color;
+        poiCtx.globalAlpha = isHov ? (hoveredRingIndex !== -1 ? 0.5 : 0.3) : 0.06;
+        poiCtx.fill();
+        poiCtx.strokeStyle = color;
+        poiCtx.globalAlpha = isHov ? 0.85 : 0.15;
+        poiCtx.lineWidth = 1.5;
+        poiCtx.stroke();
+    }
+
+    // category icons around perimeter
+    poiCtx.globalAlpha = 1;
+    poiCtx.font = '11px system-ui';
+    poiCtx.textAlign = 'center'; poiCtx.textBaseline = 'middle';
+    for (let i = 0; i < n; i++) {
+        const a = i * angleStep - Math.PI / 2;
+        const lr = plotR + 14;
+        poiCtx.fillText(poiCategories[i].icon, lr * Math.cos(a), lr * Math.sin(a));
+    }
+
+    poiCtx.globalAlpha = 1;
+    poiCtx.restore();
+}
+
+async function fetchPOIData() {
+    currentPOINodes = [];
+    renderPOIUI();
+    const [lng, lat] = pinnedCenter;
+    const maxRad = radii[radii.length - 1];
+    const radiusM = Math.round(maxRad * 1000);
+    const cacheKey = `poi:${lat.toFixed(4)},${lng.toFixed(4)},${maxRad}`;
+
+    let nodes = poiCache[cacheKey];
+    if (!nodes) {
+        if (poiAbortController) poiAbortController.abort();
+        poiAbortController = new AbortController();
+        const q = `[out:json][timeout:30];(
+  node["amenity"](around:${radiusM},${lat},${lng});
+  node["shop"](around:${radiusM},${lat},${lng});
+  node["leisure"](around:${radiusM},${lat},${lng});
+  node["public_transport"](around:${radiusM},${lat},${lng});
+  node["highway"="bus_stop"](around:${radiusM},${lat},${lng});
+  node["railway"~"station|tram_stop|subway_entrance|halt"](around:${radiusM},${lat},${lng});
+);out body;`;
+        try {
+            const res = await fetch(
+                `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(q)}`,
+                { signal: poiAbortController.signal }
+            );
+            const data = await res.json();
+            nodes = data.elements;
+            poiCache[cacheKey] = nodes;
+        } catch(e) {
+            if (e.name !== 'AbortError') console.error('POI fetch failed', e);
+            return;
+        }
+    }
+    currentPOINodes = nodes;
+    renderPOIUI();
+}
+
+function computePOICounts(ringIdx) {
+    // Returns { catKey: count } cumulative within radii[ringIdx]
+    const ruler = new CheapRuler(pinnedCenter[1]);
+    const counts = {};
+    poiCategories.forEach(c => { counts[c.key] = 0; });
+    const maxDist = radii[ringIdx];
+    currentPOINodes.forEach(node => {
+        if (ruler.distance(pinnedCenter, [node.lon, node.lat]) > maxDist) return;
+        const tags = node.tags || {};
+        for (const c of poiCategories) {
+            if (c.test(tags)) { counts[c.key]++; break; }
+        }
+    });
+    return counts;
+}
+
+function renderPOIUI() {
+    const vizEl = document.getElementById('poi-viz-inner');
+    const ringsTbody = document.getElementById('poi-rings-tbody');
+    const catList = document.getElementById('poi-category-list');
+
+    if (!currentPOINodes.length) {
+        if (vizEl) vizEl.innerHTML = '<div class="coming-soon-viz" style="padding:28px 0 8px">Fetching POI data…</div>';
+        if (ringsTbody) ringsTbody.innerHTML = '';
+        if (catList) catList.innerHTML = '';
+        return;
+    }
+
+    const ruler = new CheapRuler(pinnedCenter[1]);
+
+    // Compute counts per ring
+    const ringCounts = radii.map((_, i) => computePOICounts(i));
+    poiRingCounts = ringCounts;
+
+    // 15-min score: categories present within ring closest to 1.2km
+    const scoreIdx = radii.findIndex(r => r >= 1.2) !== -1 ? radii.findIndex(r => r >= 1.2) : 0;
+    const scoreCounts = ringCounts[scoreIdx];
+    const score = poiCategories.filter(c => scoreCounts[c.key] > 0).length;
+    const total = Object.values(ringCounts[radii.length - 1]).reduce((s, v) => s + v, 0);
+    const topCat = poiCategories.reduce((best, c) => {
+        const n = ringCounts[radii.length - 1][c.key];
+        return n > (ringCounts[radii.length - 1][best?.key] || 0) ? c : best;
+    }, poiCategories[0]);
+
+    // --- Viz panel ---
+    if (vizEl) {
+        const dots = poiCategories.map(c => {
+            const has = scoreCounts[c.key] > 0;
+            return `<span class="poi-dot${has ? ' filled' : ''}" title="${c.label}" style="${has ? `background:${c.color}` : ''}"></span>`;
+        }).join('');
+
+        vizEl.innerHTML = `
+            <div class="poi-score-row">
+                <div class="poi-score-num">${score}<span class="poi-score-denom">/7</span></div>
+                <div class="poi-score-label">
+                    <strong>Service access score</strong>
+                    <div>Categories with ≥1 location within ${fmtR(radii[scoreIdx])} km</div>
+                </div>
+                <span class="tip left-align" data-tip="How many of 7 service types (food, health, education, green space, retail, transit, active living) have at least one OSM location within this radius. Binary — presence only, not count or proximity.">?</span>
+            </div>
+            <div class="poi-dots">${dots}</div>
+            <div class="poi-caveat">Straight-line radius · not travel time</div>
+            <div class="stats-row" style="margin-top:12px;">
+                <div class="stat">
+                    <div class="stat-label">Total POIs</div>
+                    <div class="stat-value">${total.toLocaleString()}</div>
+                    <div class="stat-sub">within ${fmtR(radii[radii.length-1])} km</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">Top category</div>
+                    <div class="stat-value">${topCat.icon} ${topCat.label.split(' ')[0]}</div>
+                    <div class="stat-sub">${ringCounts[radii.length-1][topCat.key].toLocaleString()} places</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">Score</div>
+                    <div class="stat-value">${score}/7</div>
+                    <div class="stat-sub">${score >= 6 ? 'excellent' : score >= 4 ? 'good' : 'limited'}</div>
+                </div>
+            </div>
+        `;
+    }
+
+    // --- Ring table ---
+    if (ringsTbody) {
+        ringsTbody.innerHTML = '';
+        radii.forEach((radius, i) => {
+            const counts = ringCounts[i];
+            const ringTotal = Object.values(counts).reduce((s, v) => s + v, 0);
+            const ringScore = poiCategories.filter(c => counts[c.key] > 0).length;
+            const color = getRingColor(i);
+            const tr = document.createElement('tr');
+            tr.style.setProperty('--rc', color);
+            tr.innerHTML = `
+                <td>
+                    <span class="ring-swatch" style="background:${color}"></span>
+                    <div class="ring-stepper">
+                        <button class="step-btn" data-index="${i}" data-delta="-0.5">−</button>
+                        <span class="step-val">${fmtR(radius)} km</span>
+                        <button class="step-btn" data-index="${i}" data-delta="0.5">+</button>
+                    </div>
+                </td>
+                <td><span class="metric-chip">${ringTotal.toLocaleString()}</span></td>
+                <td style="text-align:right"><span class="density-val">${ringScore}/7</span></td>
+            `;
+            tr.querySelectorAll('.step-btn').forEach(btn => {
+                btn.onclick = (e) => {
+                    e.stopPropagation();
+                    const idx = parseInt(btn.dataset.index);
+                    radii[idx] = Math.max(0.5, Math.min(50, radii[idx] + parseFloat(btn.dataset.delta)));
+                    radii.sort((a, b) => a - b);
+                    renderRadiiUI(); renderPeopleUI(); renderPOIUI(); triggerHybridAnalysis(); updateMapRings();
+                };
+            });
+            tr.addEventListener('mouseenter', () => {
+                hoveredPOIRing = i;
+                setHoveredRing(i);
+                renderPOICategoryList(ringCounts[i]);
+            });
+            tr.addEventListener('mouseleave', () => {
+                hoveredPOIRing = -1;
+                clearHoveredRing();
+                renderPOICategoryList(ringCounts[radii.length - 1]);
+            });
+            ringsTbody.appendChild(tr);
+        });
+    }
+
+    // Category breakdown for outermost ring by default
+    renderPOICategoryList(ringCounts[radii.length - 1]);
+    drawPOIViz();
+}
+
+function renderPOICategoryList(counts) {
+    const catList = document.getElementById('poi-category-list');
+    if (!catList) return;
+    const maxCount = Math.max(...poiCategories.map(c => counts[c.key]), 1);
+    catList.innerHTML = poiCategories.map(c => {
+        const n = counts[c.key];
+        const pct = Math.round((n / maxCount) * 100);
+        return `<div class="poi-cat-row">
+            <div class="poi-icon" style="background:${c.bg}">${c.icon}</div>
+            <div class="poi-cat-name">${c.label}</div>
+            <div class="type-bar-wrap" style="flex:1;margin:0 8px;">
+                <div class="type-bar" style="width:${pct}%;background:${c.color}"></div>
+            </div>
+            <div class="poi-cat-count">${n.toLocaleString()}</div>
+        </div>`;
+    }).join('');
+}
+
+// --- Global tooltip math ---
+let globalNormalizedBins = [];
+let globalTypeNorms = {};
 
 let radii = [1.0, 3.0, 5.0];
 let hoveredRingIndex = -1;
-let colorMode = 'radii'; // 'radii' | 'type'
+let hoveredTypeKey = null;
+let colorMode = 'radii';
+let hoverResetTimer = null;
 
-const h = 300; 
-const r = h / 2; 
+function setHoveredRing(i) {
+    clearTimeout(hoverResetTimer);
+    if (hoveredRingIndex !== i) { hoveredRingIndex = i; processAndDrawChart(); updateMapRings(); }
+}
+function clearHoveredRing() {
+    hoverResetTimer = setTimeout(() => {
+        hoveredRingIndex = -1; processAndDrawChart(); updateMapRings();
+    }, 40);
+}
+
+const h = 200;
+const r = h / 2;
 const numBins = 64;
 const ringColors = ['rgb(255, 99, 132)', 'rgb(54, 162, 235)', 'rgb(255, 206, 86)', 'rgb(75, 192, 192)', 'rgb(153, 102, 255)'];
 
@@ -120,13 +490,12 @@ const map = new maplibregl.Map({
     zoom: 12,
     attributionControl: false
 });
-// attribution handled by custom #map-attribution element
 
 const centerMarker = new maplibregl.Marker({ color: '#1e293b', draggable: true })
     .setLngLat(pinnedCenter)
     .addTo(map);
 
-// --- Custom Search ---
+// --- Search ---
 let searchDebounce = null;
 const searchInput = document.getElementById('search-input');
 const searchResultsEl = document.getElementById('search-results');
@@ -154,7 +523,7 @@ searchResultsEl.addEventListener('keydown', (e) => {
 });
 
 document.addEventListener('click', (e) => {
-    if (!document.getElementById('search-container').contains(e.target)) searchResultsEl.style.display = 'none';
+    if (!document.getElementById('map-search').contains(e.target)) searchResultsEl.style.display = 'none';
 });
 
 async function fetchSearchSuggestions(query) {
@@ -167,7 +536,6 @@ async function fetchSearchSuggestions(query) {
             const div = document.createElement('div');
             div.className = 'search-result-item';
             div.tabIndex = 0;
-            const name = item.display_name.split(',').slice(0, 3).join(',');
             div.innerHTML = `<span class="result-name">${item.display_name.split(',')[0]}</span><span class="result-detail">${item.display_name.split(',').slice(1, 3).join(',').trim()}</span>`;
             div.onclick = () => jumpToSearchResult(item);
             searchResultsEl.appendChild(div);
@@ -180,9 +548,11 @@ function jumpToSearchResult(item) {
     pinnedCenter = [parseFloat(item.lon), parseFloat(item.lat)];
     centerMarker.setLngLat(pinnedCenter);
     map.flyTo({ center: pinnedCenter, zoom: 12 });
-    searchInput.value = item.display_name.split(',')[0];
+    const name = item.display_name.split(',')[0];
+    searchInput.value = name;
+    document.getElementById('city-name').textContent = name;
     searchResultsEl.style.display = 'none';
-    localStorage.setItem('lastCity', JSON.stringify({ name: searchInput.value, lon: pinnedCenter[0], lat: pinnedCenter[1] }));
+    localStorage.setItem('lastCity', JSON.stringify({ name, lon: pinnedCenter[0], lat: pinnedCenter[1] }));
     updateCenterInfo();
     updateMapRings();
     triggerHybridAnalysis();
@@ -197,17 +567,11 @@ centerMarker.on('dragend', () => {
 });
 
 function updateCenterInfo() {
-    document.getElementById('center-info').textContent = `${pinnedCenter[1].toFixed(4)}°N, ${pinnedCenter[0].toFixed(4)}°E`;
+    const el = document.getElementById('city-coords');
+    if (el) el.textContent = `${pinnedCenter[1].toFixed(4)}° N, ${pinnedCenter[0].toFixed(4)}° E`;
 }
 
-// --- UI Setup ---
-document.getElementById('sidebar-toggle').onclick = () => {
-    document.body.classList.toggle('sidebar-open');
-    document.getElementById('sidebar-toggle').textContent = document.body.classList.contains('sidebar-open') ? '✕' : '☰';
-    setTimeout(() => map.resize(), 350);
-};
-
-
+// --- Basemap ---
 const skipLayers = new Set(['satellite-layer', 'analysis-rings-fill', 'analysis-rings-line']);
 let isSatelliteMode = false;
 let satelliteHiddenLayers = [];
@@ -222,10 +586,7 @@ function toggleSatellite(enabled) {
             if (skipLayers.has(id)) continue;
             if (type === 'background' || type === 'fill') {
                 const vis = map.getLayoutProperty(id, 'visibility') ?? 'visible';
-                if (vis !== 'none') {
-                    map.setLayoutProperty(id, 'visibility', 'none');
-                    satelliteHiddenLayers.push(id);
-                }
+                if (vis !== 'none') { map.setLayoutProperty(id, 'visibility', 'none'); satelliteHiddenLayers.push(id); }
             } else if (type === 'line') {
                 map.setPaintProperty(id, 'line-opacity', vectorOpacity);
             } else if (type === 'symbol') {
@@ -234,9 +595,7 @@ function toggleSatellite(enabled) {
             }
         }
     } else {
-        for (const id of satelliteHiddenLayers) {
-            map.setLayoutProperty(id, 'visibility', 'visible');
-        }
+        for (const id of satelliteHiddenLayers) map.setLayoutProperty(id, 'visibility', 'visible');
         satelliteHiddenLayers = [];
         for (const { id, type } of map.getStyle().layers) {
             if (skipLayers.has(id)) continue;
@@ -251,8 +610,8 @@ function toggleSatellite(enabled) {
 
 function setBasemap(mode) {
     isSatelliteMode = (mode === 'satellite');
-    document.getElementById('basemap-card-streets').classList.toggle('active', !isSatelliteMode);
-    document.getElementById('basemap-card-satellite').classList.toggle('active', isSatelliteMode);
+    document.getElementById('bm-thumb-streets').classList.toggle('active', !isSatelliteMode);
+    document.getElementById('bm-thumb-satellite').classList.toggle('active', isSatelliteMode);
     document.getElementById('vec-opacity-row').style.display = isSatelliteMode ? 'flex' : 'none';
     toggleSatellite(isSatelliteMode);
 }
@@ -270,6 +629,46 @@ document.getElementById('vec-opacity-slider').oninput = (e) => {
     }
 };
 
+// --- Panel resize ---
+(function() {
+    const resizer = document.getElementById('panel-resizer');
+    const panel = document.getElementById('panel');
+    let startX, startW;
+    resizer.addEventListener('mousedown', (e) => {
+        startX = e.clientX;
+        startW = panel.offsetWidth;
+        resizer.classList.add('dragging');
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+        function onMove(e) {
+            const dx = startX - e.clientX; // panel is on the right
+            const newW = Math.min(600, Math.max(280, startW + dx));
+            panel.style.width = newW + 'px';
+        }
+        function onUp() {
+            resizer.classList.remove('dragging');
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    });
+})();
+
+// Basemap toggle — click to open/close
+document.querySelector('.basemap-toggle').addEventListener('click', (e) => {
+    e.stopPropagation();
+    document.getElementById('basemap-float').classList.toggle('open');
+});
+document.addEventListener('click', (e) => {
+    if (!document.getElementById('basemap-float').contains(e.target)) {
+        document.getElementById('basemap-float').classList.remove('open');
+    }
+});
+
+// Attribution
 const attrToggle = document.getElementById('attr-toggle');
 const attrText = document.getElementById('attr-text');
 attrToggle.onclick = () => { attrText.style.display = attrText.style.display === 'block' ? 'none' : 'block'; };
@@ -277,115 +676,290 @@ document.addEventListener('click', (e) => {
     if (!document.getElementById('map-attribution').contains(e.target)) attrText.style.display = 'none';
 });
 
+// Share button — copy current URL
+document.getElementById('share-btn').onclick = () => {
+    navigator.clipboard.writeText(window.location.href).then(() => {
+        const btn = document.getElementById('share-btn');
+        btn.textContent = '✓';
+        setTimeout(() => { btn.textContent = '⤴'; }, 1500);
+    });
+};
+
+// --- Color mode ---
 document.getElementById('color-mode-radii').onclick = () => {
     colorMode = 'radii';
     document.getElementById('color-mode-radii').classList.add('active');
     document.getElementById('color-mode-type').classList.remove('active');
-    document.getElementById('road-type-list').style.display = 'none';
-    hoveredRingIndex = -1; renderRadiiUI(); processAndDrawChart(); updateMapRings();
+    hoveredRingIndex = -1; processAndDrawChart(); updateMapRings();
 };
 document.getElementById('color-mode-type').onclick = () => {
     colorMode = 'type';
     document.getElementById('color-mode-type').classList.add('active');
     document.getElementById('color-mode-radii').classList.remove('active');
-    document.getElementById('road-type-list').style.display = 'flex';
-    hoveredRingIndex = -1; renderRadiiUI(); processAndDrawChart(); updateMapRings();
+    hoveredRingIndex = -1; processAndDrawChart(); updateMapRings();
 };
 
 function getRingColor(i) { return ringColors[i % ringColors.length]; }
 
+// --- Render rings table (Roads tab) ---
 function renderRadiiUI() {
-    const container = document.getElementById('radii-list');
-    container.innerHTML = '';
-    radii.forEach((radius, i) => {
-        const row = document.createElement('div');
-        row.className = 'radius-row';
-        if (hoveredRingIndex === i) {
-            row.style.borderColor = getRingColor(i);
-            row.style.boxShadow = `0 2px 8px ${getRingColor(i).replace('rgb', 'rgba').replace(')', ', 0.2)')}`;
-        }
-        const popVal = ringPopulations[radius];
-        let popInner;
-        if (popVal === undefined) {
-            popInner = '<span class="pop-value">…</span>';
-        } else if (popVal === null) {
-            popInner = '<span class="pop-value">N/A</span>';
-        } else {
-            const transit = [];
-            if (popVal.bus > 0) transit.push(`${popVal.bus} bus`);
-            if (popVal.tram > 0) transit.push(`${popVal.tram} tram`);
-            if (popVal.rail > 0) transit.push(`${popVal.rail} rail`);
-            popInner = `<span class="pop-value">${formatPop(popVal.people)}</span>`;
-            if (transit.length) popInner += `<span class="pop-transit">${transit.join(' · ')}</span>`;
-        }
-        const ent = ringEntropies[i], den = ringDensities[i];
-        if (ent !== undefined) {
-            popInner += `<span class="pop-metrics">H ${ent.toFixed(2)} · ${den.toFixed(1)} km/km²</span>`;
-        }
-        row.innerHTML = `<div class="color-swatch" style="background-color: ${getRingColor(i)}"></div>
-            <input type="number" value="${radius}" step="0.5" min="0.5" max="50" data-index="${i}">
-            <span class="unit-label">km</span>
-            <span class="ring-pop">${popInner}</span>
-            <button class="remove-btn">×</button>`;
+    const tbody = document.getElementById('rings-tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
 
-        row.querySelector('input').onchange = (e) => {
-            let val = parseFloat(e.target.value);
-            val = Math.min(50, Math.max(0.5, val));
-            e.target.value = val;
-            radii[i] = val; radii.sort((a, b) => a - b); renderRadiiUI(); triggerHybridAnalysis(); updateMapRings();
-        };
-        row.querySelector('.remove-btn').onclick = () => {
-            if (radii.length > 1) { radii.splice(i, 1); hoveredRingIndex = -1; renderRadiiUI(); triggerHybridAnalysis(); updateMapRings(); }
-        };
-        container.appendChild(row);
+    radii.forEach((radius, i) => {
+        const ent = ringEntropies[i];
+        const den = ringDensities[i];
+        const color = getRingColor(i);
+        const tr = document.createElement('tr');
+        tr.style.setProperty('--rc', color);
+        tr.innerHTML = `
+            <td>
+                <span class="ring-swatch" style="background:${color}"></span>
+                <div class="ring-stepper">
+                    <button class="step-btn" data-index="${i}" data-delta="-0.5">−</button>
+                    <span class="step-val">${fmtR(radius)} km</span>
+                    <button class="step-btn" data-index="${i}" data-delta="0.5">+</button>
+                </div>
+            </td>
+            <td><span class="metric-chip">${ent !== undefined ? ent.toFixed(2) : '—'}</span></td>
+            <td><span class="density-val">${den !== undefined ? den.toFixed(1) : '—'}</span></td>
+            <td><button class="remove-btn" data-index="${i}">×</button></td>
+        `;
+
+        tr.addEventListener('mouseenter', () => setHoveredRing(i));
+        tr.addEventListener('mouseleave', clearHoveredRing);
+        tbody.appendChild(tr);
     });
+
+    tbody.querySelectorAll('.step-btn').forEach(btn => {
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            const i = parseInt(btn.dataset.index);
+            const delta = parseFloat(btn.dataset.delta);
+            radii[i] = Math.max(0.5, Math.min(50, radii[i] + delta));
+            radii.sort((a, b) => a - b);
+            renderRadiiUI(); triggerHybridAnalysis(); updateMapRings();
+        };
+    });
+
+    tbody.querySelectorAll('.remove-btn').forEach(btn => {
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            const i = parseInt(btn.dataset.index);
+            if (radii.length > 1) {
+                radii.splice(i, 1);
+                hoveredRingIndex = -1;
+                renderRadiiUI(); triggerHybridAnalysis(); updateMapRings();
+            }
+        };
+    });
+
+    const addBtn = document.getElementById('add-radius-btn');
+    if (addBtn) addBtn.disabled = radii.length >= 5;
 }
 
-document.getElementById('add-radius-btn').onclick = () => {
-    const next = Math.min(50, radii[radii.length - 1] + 2.0);
-    if (next === radii[radii.length - 1]) return; // already at max
-    radii.push(next); renderRadiiUI(); triggerHybridAnalysis(); updateMapRings();
-};
+// --- Render people tab ---
+function renderPeopleUI() {
+    // Pop bars in viz-people
+    const popBarsEl = document.getElementById('pop-bars');
+    if (popBarsEl) {
+        const pops = radii.map(r => { const p = ringPopulations[r]; return p ? p.people : 0; });
+        const maxPop = Math.max(...pops, 1);
+        popBarsEl.innerHTML = radii.map((radius, i) => {
+            const p = ringPopulations[radius];
+            const color = getRingColor(i);
+            const pop = p ? p.people : null;
+            const pct = pop ? Math.round((pop / maxPop) * 100) : 0;
+            const label = pop !== null ? (pop !== undefined ? formatPop(pop) : '…') : (p === undefined ? '…' : 'N/A');
+            return `<div class="pop-bar-row">
+                <div class="pop-bar-label" style="color:${color}">${fmtR(radius)} km</div>
+                <div class="pop-bar-track"><div class="pop-bar-fill" style="width:${pct}%;background:${color}"></div></div>
+                <div class="pop-bar-val">${label}</div>
+            </div>`;
+        }).join('');
+    }
 
+    // People table — same ring row structure as Roads tab
+    const peopleTbody = document.getElementById('people-tbody');
+    if (peopleTbody) {
+        peopleTbody.innerHTML = '';
+        radii.forEach((radius, i) => {
+            const p = ringPopulations[radius];
+            const color = getRingColor(i);
+            const popStr = p === undefined ? '…' : (p === null ? 'N/A' : formatPop(p.people));
+            const transitMain = p ? `${p.bus}🚌 · ${p.tram}🚋 · ${p.rail}🚆` : '—';
+            const bus100k = p && p.people > 0 ? ((p.bus / p.people) * 100000).toFixed(1) : null;
+            const rail100k = p && p.people > 0 ? (((p.rail + p.tram) / p.people) * 100000).toFixed(1) : null;
+            const transitSub = bus100k ? `${bus100k} bus · ${rail100k} rail per 100K` : '';
+
+            const tr = document.createElement('tr');
+            tr.style.setProperty('--rc', color);
+            tr.innerHTML = `
+                <td>
+                    <span class="ring-swatch" style="background:${color}"></span>
+                    <div class="ring-stepper">
+                        <button class="step-btn" data-index="${i}" data-delta="-0.5">−</button>
+                        <span class="step-val">${fmtR(radius)} km</span>
+                        <button class="step-btn" data-index="${i}" data-delta="0.5">+</button>
+                    </div>
+                </td>
+                <td>
+                    <span class="metric-chip">${popStr}</span>
+                </td>
+                <td style="text-align:right">
+                    <span class="density-val">${transitMain}</span>
+                    ${transitSub ? `<div class="ring-sub">${transitSub}</div>` : ''}
+                </td>
+            `;
+
+            tr.querySelectorAll('.step-btn').forEach(btn => {
+                btn.onclick = (e) => {
+                    e.stopPropagation();
+                    const idx = parseInt(btn.dataset.index);
+                    const delta = parseFloat(btn.dataset.delta);
+                    radii[idx] = Math.max(0.5, Math.min(50, radii[idx] + delta));
+                    radii.sort((a, b) => a - b);
+                    renderRadiiUI(); renderPeopleUI(); triggerHybridAnalysis(); updateMapRings();
+                };
+            });
+
+            tr.addEventListener('mouseenter', () => setHoveredRing(i));
+            tr.addEventListener('mouseleave', clearHoveredRing);
+            peopleTbody.appendChild(tr);
+        });
+    }
+
+    // People stats
+    const outerPop = ringPopulations[radii[radii.length - 1]];
+    const outerRadius = radii[radii.length - 1];
+    const popTotalEl = document.getElementById('stat-pop-total');
+    const popRangeEl = document.getElementById('stat-pop-range');
+    const transitEl = document.getElementById('stat-transit');
+    const popDensityEl = document.getElementById('stat-pop-density');
+
+    if (outerPop && outerPop.people) {
+        if (popTotalEl) popTotalEl.textContent = formatPop(outerPop.people);
+        if (popRangeEl) popRangeEl.textContent = `within ${fmtR(outerRadius)} km`;
+        const area = Math.PI * outerRadius * outerRadius;
+        if (popDensityEl) popDensityEl.textContent = Math.round(outerPop.people / area).toLocaleString();
+        const stopsAll = outerPop.bus + outerPop.rail + outerPop.tram;
+        if (transitEl) transitEl.textContent = outerPop.people > 0 ? ((stopsAll / outerPop.people) * 100000).toFixed(1) : '—';
+    } else {
+        if (popTotalEl) popTotalEl.textContent = outerPop === undefined ? '…' : '—';
+        if (transitEl) transitEl.textContent = '—';
+        if (popDensityEl) popDensityEl.textContent = '—';
+    }
+    drawPeopleViz();
+}
+
+// --- Render road type bars ---
 function renderRoadTypeUI() {
     const container = document.getElementById('road-type-list');
+    if (!container) return;
+
+    const ruler = new CheapRuler(pinnedCenter[1]);
+    const typeLengths = {};
+    roadTypeGroups.forEach(g => { typeLengths[g.key] = 0; });
+    const maxRad = radii[radii.length - 1];
+
+    if (currentSegments.length > 0) {
+        currentSegments.forEach(seg => {
+            const mid = [(seg.p1[0] + seg.p2[0]) / 2, (seg.p1[1] + seg.p2[1]) / 2];
+            if (ruler.distance(pinnedCenter, mid) > maxRad) return;
+            const hw = seg.highway || '';
+            const len = ruler.distance(seg.p1, seg.p2);
+            for (const g of roadTypeGroups) { if (g.types.has(hw)) { typeLengths[g.key] += len; break; } }
+        });
+    }
+
+    const total = Object.values(typeLengths).reduce((s, v) => s + v, 0);
     container.innerHTML = '';
     roadTypeGroups.forEach(g => {
-        const row = document.createElement('label');
+        const pct = total > 0 ? Math.round((typeLengths[g.key] / total) * 100) : 0;
+        const row = document.createElement('div');
         row.className = 'type-row';
-        row.innerHTML = `<input type="checkbox" ${activeTypeGroups.has(g.key) ? 'checked' : ''} data-key="${g.key}">
-            <span class="color-swatch" style="background:${g.color}"></span>
-            <span class="type-label">${g.label}</span>`;
-        row.querySelector('input').onchange = (e) => {
-            if (e.target.checked) activeTypeGroups.add(g.key); else activeTypeGroups.delete(g.key);
+        row.dataset.key = g.key;
+        row.innerHTML = `
+            <div class="type-color" style="background:${g.color}"></div>
+            <div class="type-label">${g.label}</div>
+            <div class="type-bar-wrap"><div class="type-bar" style="width:${pct}%;background:${g.color}"></div></div>
+            <div class="type-pct">${pct}%</div>
+        `;
+        row.addEventListener('mouseenter', () => {
+            hoveredTypeKey = g.key;
+            row.style.borderLeftColor = g.color;
             processAndDrawChart();
-        };
+        });
+        row.addEventListener('mouseleave', () => {
+            hoveredTypeKey = null;
+            row.style.borderLeftColor = 'transparent';
+            processAndDrawChart();
+        });
         container.appendChild(row);
     });
 }
 
+// --- Update road stats (dominant, entropy, density) ---
+function updateRoadsStats() {
+    const outerIdx = radii.length - 1;
+    const ent = ringEntropies[outerIdx];
+    const den = ringDensities[outerIdx];
+
+    const entEl = document.getElementById('stat-entropy');
+    const entLabelEl = document.getElementById('stat-entropy-label');
+    const denEl = document.getElementById('stat-density');
+    const domEl = document.getElementById('stat-dominant');
+    const domDegEl = document.getElementById('stat-dominant-deg');
+
+    if (ent !== undefined) {
+        if (entEl) entEl.textContent = ent.toFixed(2);
+        if (entLabelEl) entLabelEl.textContent = ent < 0.5 ? 'grid' : ent < 0.8 ? 'mixed' : 'organic';
+    }
+    if (den !== undefined && denEl) denEl.textContent = den.toFixed(1);
+
+    if (globalNormalizedBins.length > 0) {
+        const outerBins = globalNormalizedBins[Math.min(outerIdx, globalNormalizedBins.length - 1)];
+        let maxBin = 0, maxVal = 0;
+        for (let b = 0; b < numBins; b++) { if (outerBins[b] > maxVal) { maxVal = outerBins[b]; maxBin = b; } }
+        const deg = Math.round(maxBin * 360 / numBins);
+        const oppDeg = (deg + 180) % 360;
+        if (domEl) domEl.textContent = `${getCompassDirection(deg)}–${getCompassDirection(oppDeg)}`;
+        if (domDegEl) domDegEl.textContent = `~${deg}°`;
+    }
+}
+
+// --- Status badge ---
 function updateStatus(state) {
     const el = document.getElementById('data-status');
-    el.className = state;
-    if (state === 'fast') { el.innerText = "FAST (MAP VIEW)"; el.onclick = null; el.style.cursor = ''; }
-    if (state === 'fetching') { el.innerText = "FETCHING PRECISE DATA..."; el.onclick = null; el.style.cursor = ''; }
-    if (state === 'precise') { el.innerText = "PRECISE (OVERPASS)"; el.onclick = null; el.style.cursor = ''; }
-    if (state === 'error') {
-        el.innerText = "OVERPASS UNAVAILABLE — CLICK TO RETRY";
+    if (!el) return;
+    el.className = `data-badge ${state}`;
+    if (state === 'fast')     { el.textContent = 'FAST'; el.onclick = null; el.style.cursor = ''; }
+    if (state === 'fetching') { el.textContent = 'FETCHING…'; el.onclick = null; el.style.cursor = ''; }
+    if (state === 'precise')  { el.textContent = 'PRECISE'; el.onclick = null; el.style.cursor = ''; }
+    if (state === 'error')    {
+        el.textContent = 'ERROR — RETRY';
         el.style.cursor = 'pointer';
         el.onclick = () => { el.onclick = null; triggerHybridAnalysis(); };
     }
 }
 
+// --- Add ring ---
+document.getElementById('add-radius-btn').onclick = () => {
+    if (radii.length >= 5) return;
+    const next = Math.min(50, radii[radii.length - 1] + 2.0);
+    if (next === radii[radii.length - 1]) return;
+    radii.push(next); renderRadiiUI(); triggerHybridAnalysis(); updateMapRings();
+};
+
 // --- Hybrid Data Engine ---
 function extractLocalSegments() {
     const bounds = map.getBounds();
     const bbox = [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()];
-    const features = map.queryRenderedFeatures().filter(f => 
+    const features = map.queryRenderedFeatures().filter(f =>
         f.geometry && (f.geometry.type === 'LineString' || f.geometry.type === 'MultiLineString') &&
         f.layer && f.layer['source-layer'] && (f.layer['source-layer'] === 'street' || f.layer['source-layer'] === 'transportation')
     );
-
     const segments = [];
     features.forEach(f => {
         const isTwoWay = f.properties.oneway !== 'yes' && f.properties.oneway !== 1 && f.properties.oneway !== true;
@@ -404,21 +978,16 @@ function extractLocalSegments() {
 }
 
 async function fetchOverpassSegments(centerCoords, maxRadiusKm) {
-    if (activeAbortController) activeAbortController.abort(); 
+    if (activeAbortController) activeAbortController.abort();
     activeAbortController = new AbortController();
     const signal = activeAbortController.signal;
-
     const [lng, lat] = centerCoords;
     const radiusMeters = maxRadiusKm * 1000;
     const cacheKey = `${lng},${lat},${maxRadiusKm}`;
-
     if (dataCache[cacheKey]) return dataCache[cacheKey];
-
     updateStatus('fetching');
-    
     const query = `[out:json][timeout:25];(way["highway"](around:${radiusMeters},${lat},${lng}););out geom;`;
     const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
-
     try {
         const response = await fetch(url, { signal });
         const data = await response.json();
@@ -433,7 +1002,7 @@ async function fetchOverpassSegments(centerCoords, maxRadiusKm) {
                 }
             }
         });
-        dataCache[cacheKey] = segments; 
+        dataCache[cacheKey] = segments;
         return segments;
     } catch (error) {
         if (error.name === 'AbortError') console.log('Previous fetch cancelled');
@@ -447,26 +1016,24 @@ async function triggerHybridAnalysis() {
     updateStatus('fast');
     processAndDrawChart();
     fetchRingPopulations();
-
     const fetchRadius = radii[radii.length - 1] + 1;
     const preciseSegments = await fetchOverpassSegments(pinnedCenter, fetchRadius);
-
     if (preciseSegments) {
         currentSegments = preciseSegments;
         updateStatus('precise');
         processAndDrawChart();
-    } else if (!activeAbortController || !activeAbortController.signal.aborted) {
-        // status already set to 'error' inside fetchOverpassSegments; leave it
     }
+    fetchPOIData();
 }
 
-// --- Mathematics & Canvas Drawing ---
+// --- Canvas setup ---
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 canvas.style.width = canvas.style.height = h + 'px';
 canvas.width = canvas.height = h;
 if (window.devicePixelRatio > 1) { canvas.width = canvas.height = h * 2; ctx.scale(2, 2); }
 
+// --- Main chart drawing ---
 function processAndDrawChart() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -478,15 +1045,15 @@ function processAndDrawChart() {
     ctx.strokeStyle = 'rgba(0,0,0,0.1)'; ctx.lineWidth = 0.5; ctx.beginPath();
     ctx.moveTo(-r, 0); ctx.lineTo(r, 0); ctx.moveTo(0, -r); ctx.lineTo(0, r); ctx.stroke();
 
-    if (!currentSegments || currentSegments.length === 0) { ctx.restore(); return; }
+    if (!currentSegments || currentSegments.length === 0) { ctx.restore(); updateRoadsStats(); return; }
 
     const ruler = new CheapRuler(pinnedCenter[1]);
 
-    // --- Ring metrics: entropy + street density (always runs, independent of color mode) ---
+    // --- Compute ring metrics (entropy + street density) ---
     {
         const mBins = Array.from({ length: radii.length }, () => new Float64Array(numBins));
-        const mLen = new Float64Array(radii.length);     // weighted length for entropy (two-way counted twice)
-        const mLenPhys = new Float64Array(radii.length); // physical road length for density
+        const mLen = new Float64Array(radii.length);
+        const mLenPhys = new Float64Array(radii.length);
         const maxRad = radii[radii.length - 1];
         currentSegments.forEach(seg => {
             const mid = [(seg.p1[0] + seg.p2[0]) / 2, (seg.p1[1] + seg.p2[1]) / 2];
@@ -512,7 +1079,7 @@ function processAndDrawChart() {
                 for (let b = 0; b < numBins; b++) {
                     if (cumBins[b] > 0) { const p = cumBins[b] / tot; H -= p * Math.log2(p); }
                 }
-                H /= Math.log2(numBins); // normalize to [0, 1]
+                H /= Math.log2(numBins);
             }
             newEntropies.push(H);
             const area = Math.PI * radii[i] * radii[i];
@@ -524,22 +1091,19 @@ function processAndDrawChart() {
             ringEntropies = newEntropies;
             ringDensities = newDensities;
             renderRadiiUI();
+            renderRoadTypeUI();
         }
     }
 
-    if (colorMode === 'radii') {
-        // --- Radii mode: cumulative rings, colored by distance band ---
+    if (colorMode === 'radii' && !hoveredTypeKey) {
         const stackedBins = Array.from({ length: radii.length }, () => new Float64Array(numBins));
         const maxRadius = radii[radii.length - 1];
-
         currentSegments.forEach(seg => {
             const midPt = [(seg.p1[0] + seg.p2[0]) / 2, (seg.p1[1] + seg.p2[1]) / 2];
             const distToCenter = ruler.distance(pinnedCenter, midPt);
             if (distToCenter > maxRadius) return;
             let ringIndex = 0;
-            for (let rIdx = 0; rIdx < radii.length; rIdx++) {
-                if (distToCenter <= radii[rIdx]) { ringIndex = rIdx; break; }
-            }
+            for (let rIdx = 0; rIdx < radii.length; rIdx++) { if (distToCenter <= radii[rIdx]) { ringIndex = rIdx; break; } }
             const segBearing = ruler.bearing(seg.p1, seg.p2);
             const distance = ruler.distance(seg.p1, seg.p2);
             const k0 = Math.round((segBearing + 360) * numBins / 360) % numBins;
@@ -571,7 +1135,7 @@ function processAndDrawChart() {
             }
         }
 
-        if (maxPercentage === 0) { ctx.restore(); return; }
+        if (maxPercentage === 0) { ctx.restore(); updateRoadsStats(); return; }
 
         ctx.strokeStyle = 'rgba(0,0,0,0.08)'; ctx.lineWidth = 0.5;
         for (let g = 1; g <= 4; g++) {
@@ -600,22 +1164,18 @@ function processAndDrawChart() {
         }
 
     } else {
-        // --- Type mode: cumulative per type, same rings logic as radii mode ---
         const stackedTypeBins = {};
         roadTypeGroups.forEach(g => {
             if (activeTypeGroups.has(g.key))
                 stackedTypeBins[g.key] = Array.from({ length: radii.length }, () => new Float64Array(numBins));
         });
-
         const outerRadius = radii[radii.length - 1];
         currentSegments.forEach(seg => {
             const midPt = [(seg.p1[0] + seg.p2[0]) / 2, (seg.p1[1] + seg.p2[1]) / 2];
             const distToCenter = ruler.distance(pinnedCenter, midPt);
             if (distToCenter > outerRadius) return;
             let ringIndex = 0;
-            for (let rIdx = 0; rIdx < radii.length; rIdx++) {
-                if (distToCenter <= radii[rIdx]) { ringIndex = rIdx; break; }
-            }
+            for (let rIdx = 0; rIdx < radii.length; rIdx++) { if (distToCenter <= radii[rIdx]) { ringIndex = rIdx; break; } }
             const hw = seg.highway || '';
             let groupKey = null;
             for (const g of roadTypeGroups) { if (g.types.has(hw)) { groupKey = g.key; break; } }
@@ -629,16 +1189,14 @@ function processAndDrawChart() {
             if (seg.isTwoWay) bins[k1] += distance;
         });
 
-        // Shared total (all types, all raw rings)
         let total = 0;
         roadTypeGroups.forEach(g => {
             if (!stackedTypeBins[g.key]) return;
             for (let ring = 0; ring < radii.length; ring++)
                 for (let b = 0; b < numBins; b++) total += stackedTypeBins[g.key][ring][b];
         });
-        if (total === 0) { ctx.restore(); return; }
+        if (total === 0) { ctx.restore(); updateRoadsStats(); return; }
 
-        // Build cumulative normalized bins per type per ring
         const normTypeBins = {};
         let maxPercentage = 0;
         roadTypeGroups.forEach(g => {
@@ -654,9 +1212,8 @@ function processAndDrawChart() {
                 }
             }
         });
-        if (maxPercentage === 0) { ctx.restore(); return; }
+        if (maxPercentage === 0) { ctx.restore(); updateRoadsStats(); return; }
 
-        // Recompute maxPercentage as max stacked total per bin so bars stay within bounding circle
         maxPercentage = 0;
         for (let ring = 0; ring < radii.length; ring++) {
             for (let b = 0; b < numBins; b++) {
@@ -665,9 +1222,8 @@ function processAndDrawChart() {
                 if (binTotal > maxPercentage) maxPercentage = binTotal;
             }
         }
-        if (maxPercentage === 0) { ctx.restore(); return; }
+        if (maxPercentage === 0) { ctx.restore(); updateRoadsStats(); return; }
 
-        // Store flat tooltip data: use hovered ring or outermost
         const tooltipRing = hoveredRingIndex !== -1 ? hoveredRingIndex : radii.length - 1;
         globalTypeNorms = {};
         roadTypeGroups.forEach(g => { if (normTypeBins[g.key]) globalTypeNorms[g.key] = normTypeBins[g.key][tooltipRing]; });
@@ -677,9 +1233,7 @@ function processAndDrawChart() {
             ctx.beginPath(); ctx.arc(0, 0, r * Math.sqrt(g / 4), 0, 2 * Math.PI, false); ctx.stroke();
         }
 
-        // Draw stacked type rose: each bin is a single bar with type segments stacked outward
         const stackOrder = ['major', 'arterial', 'local', 'service', 'path'];
-
         function drawStackedBins(ring, alpha) {
             for (let b = 0; b < numBins; b++) {
                 const a0 = ((b - 0.5) * 360 / numBins - 90) * Math.PI / 180;
@@ -692,7 +1246,9 @@ function processAndDrawChart() {
                     if (pct <= 0) continue;
                     const innerR = cumulative > 0 ? r * Math.sqrt(cumulative / maxPercentage) : 0;
                     const outerR = r * Math.sqrt((cumulative + pct) / maxPercentage);
-                    ctx.globalAlpha = alpha;
+                    // Dim non-hovered types when a type is hovered
+                    const typeAlpha = hoveredTypeKey ? (key === hoveredTypeKey ? alpha : alpha * 0.1) : alpha;
+                    ctx.globalAlpha = typeAlpha;
                     ctx.fillStyle = g.color;
                     ctx.beginPath();
                     ctx.arc(0, 0, outerR, a0, a1);
@@ -707,7 +1263,7 @@ function processAndDrawChart() {
         if (hoveredRingIndex === -1) {
             for (let ring = radii.length - 1; ring >= 0; ring--) {
                 const t = radii.length === 1 ? 1 : (radii.length - 1 - ring) / (radii.length - 1);
-                drawStackedBins(ring, 0.5 + t * 0.35);
+                drawStackedBins(ring, hoveredTypeKey ? 0.85 : 0.5 + t * 0.35);
             }
         } else {
             for (let ring = radii.length - 1; ring >= 0; ring--)
@@ -717,6 +1273,9 @@ function processAndDrawChart() {
     }
 
     ctx.globalAlpha = 1.0; ctx.restore();
+    updateRoadsStats();
+    drawPeopleViz();
+    drawPOIViz();
 }
 
 // --- Map Ring Geometries ---
@@ -726,57 +1285,61 @@ function updateMapRings() {
     for (let i = radii.length - 1; i >= 0; i--) {
         const radius = radii[i];
         const outerCircle = turf.circle(pinnedCenter, radius, { steps: 64, units: 'kilometers' });
-        const coords = [outerCircle.geometry.coordinates[0]];
-        features.push(turf.polygon(coords, {
+        features.push(turf.polygon([outerCircle.geometry.coordinates[0]], {
             ringIndex: i, color: getRingColor(i),
             fillOpacity: Math.max(0.02, hoveredRingIndex === -1 ? 0.15 : (hoveredRingIndex === i ? 0.3 : 0.05)),
             lineOpacity: Math.max(0.05, hoveredRingIndex === -1 ? 0.8 : (hoveredRingIndex === i ? 1.0 : 0.1))
         }));
     }
-    const geojson = { type: "FeatureCollection", features: features };
-
-    if (map.getSource('analysis-rings')) { map.getSource('analysis-rings').setData(geojson); } 
+    const geojson = { type: "FeatureCollection", features };
+    if (map.getSource('analysis-rings')) { map.getSource('analysis-rings').setData(geojson); }
     else {
         map.addSource('analysis-rings', { type: 'geojson', data: geojson });
-        map.addLayer({ 'id': 'analysis-rings-fill', 'type': 'fill', 'source': 'analysis-rings', 'paint': { 'fill-color': ['get', 'color'], 'fill-opacity': ['get', 'fillOpacity'] } });
-        map.addLayer({ 'id': 'analysis-rings-line', 'type': 'line', 'source': 'analysis-rings', 'paint': { 'line-color': ['get', 'color'], 'line-width': 2, 'line-opacity': ['get', 'lineOpacity'], 'line-dasharray': [2, 2] } });
+        map.addLayer({ id: 'analysis-rings-fill', type: 'fill', source: 'analysis-rings', paint: {
+            'fill-color': ['get', 'color'],
+            'fill-opacity': ['get', 'fillOpacity'],
+            'fill-opacity-transition': { duration: 150, delay: 0 }
+        }});
+        map.addLayer({ id: 'analysis-rings-line', type: 'line', source: 'analysis-rings', paint: {
+            'line-color': ['get', 'color'],
+            'line-width': 2,
+            'line-opacity': ['get', 'lineOpacity'],
+            'line-opacity-transition': { duration: 150, delay: 0 },
+            'line-dasharray': [2, 2]
+        }});
     }
 }
 
-// --- Helpers for Tooltips ---
+// --- Compass helper ---
 function getCompassDirection(degrees) {
     const dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
     const index = Math.round(((degrees %= 360) < 0 ? degrees + 360 : degrees) / 22.5) % 16;
     return dirs[index];
 }
 
-function hideTooltip() {
-    document.getElementById('chart-tooltip').style.display = 'none';
-}
+function hideTooltip() { document.getElementById('chart-tooltip').style.display = 'none'; }
 
-// --- Event Listeners ---
+// --- Map load ---
 map.on('load', async () => {
-    // Add satellite basemap layer below all Positron layers
     const firstStyleLayerId = map.getStyle().layers[0]?.id;
     map.addSource('satellite', {
         type: 'raster',
         tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
-        tileSize: 256,
-        attribution: '© Esri, Maxar, Earthstar Geographics'
+        tileSize: 256, attribution: '© Esri, Maxar, Earthstar Geographics'
     });
     map.addLayer({ id: 'satellite-layer', type: 'raster', source: 'satellite', layout: { visibility: 'none' } }, firstStyleLayerId);
 
-    // Draw rings and start analysis immediately at default center
-    updateCenterInfo(); renderRadiiUI(); renderRoadTypeUI(); updateMapRings();
+    updateCenterInfo(); renderRadiiUI(); renderPeopleUI(); renderPOIUI(); renderRoadTypeUI(); updateMapRings();
     setTimeout(() => { triggerHybridAnalysis(); }, 400);
 
-    // Restore last city from localStorage, or fall back to HCMC
+    // Restore last city or default to HCMC
     const saved = (() => { try { return JSON.parse(localStorage.getItem('lastCity')); } catch { return null; } })();
     if (saved) {
         pinnedCenter = [saved.lon, saved.lat];
         centerMarker.setLngLat(pinnedCenter);
         map.setCenter(pinnedCenter);
         searchInput.value = saved.name;
+        document.getElementById('city-name').textContent = saved.name;
         updateCenterInfo(); updateMapRings(); triggerHybridAnalysis();
     } else {
         try {
@@ -787,42 +1350,45 @@ map.on('load', async () => {
                 centerMarker.setLngLat(pinnedCenter);
                 map.setCenter(pinnedCenter);
                 searchInput.value = 'Ho Chi Minh City';
+                document.getElementById('city-name').textContent = 'Ho Chi Minh City';
                 updateCenterInfo(); updateMapRings();
             }
         } catch(e) { console.error('Initial geocode failed', e); }
     }
-    
+
     map.on('mousemove', 'analysis-rings-fill', (e) => {
         if (e.features.length > 0) {
-            const idx = e.features[0].properties.ringIndex;
-            if (idx !== hoveredRingIndex) { hoveredRingIndex = idx; map.getCanvas().style.cursor = 'pointer'; renderRadiiUI(); processAndDrawChart(); updateMapRings(); }
+            map.getCanvas().style.cursor = 'pointer';
+            setHoveredRing(e.features[0].properties.ringIndex);
         }
     });
     map.on('mouseleave', 'analysis-rings-fill', () => {
-        if (hoveredRingIndex !== -1) { hoveredRingIndex = -1; map.getCanvas().style.cursor = ''; renderRadiiUI(); processAndDrawChart(); updateMapRings(); }
+        map.getCanvas().style.cursor = '';
+        clearHoveredRing();
     });
 });
 
 map.on('moveend', () => {
-    if (document.getElementById('data-status').className === 'fast') {
+    if (document.getElementById('data-status').className.includes('fast')) {
         currentSegments = extractLocalSegments();
         processAndDrawChart();
     }
 });
 
-// Hover logic for chart + Tooltips
+// --- Canvas hover & tooltips ---
 const canvasContainer = document.getElementById('canvas-container');
 const tooltip = document.getElementById('chart-tooltip');
 
 canvasContainer.addEventListener('mousemove', (e) => {
     const rect = canvasContainer.getBoundingClientRect();
-    const mx = e.clientX - rect.left - r;
-    const my = e.clientY - rect.top - r;
+    const mx = e.clientX - rect.left - rect.width / 2;
+    const my = e.clientY - rect.top - rect.height / 2;
     const dist = Math.sqrt(mx*mx + my*my);
+    const effectiveR = rect.width / 2 - 6; // subtract padding
 
-    if (dist > r) {
+    if (dist > effectiveR) {
         if (colorMode === 'radii' && hoveredRingIndex !== -1) {
-            hoveredRingIndex = -1; renderRadiiUI(); processAndDrawChart(); updateMapRings();
+            hoveredRingIndex = -1; processAndDrawChart(); updateMapRings();
         }
         hideTooltip(); return;
     }
@@ -833,10 +1399,8 @@ canvasContainer.addEventListener('mousemove', (e) => {
     const compassDir = getCompassDirection(angleDeg);
 
     if (colorMode === 'radii') {
-        const bestRing = Math.min(Math.floor((dist / r) * radii.length), radii.length - 1);
-        if (bestRing !== hoveredRingIndex) {
-            hoveredRingIndex = bestRing; renderRadiiUI(); processAndDrawChart(); updateMapRings();
-        }
+        const bestRing = Math.min(Math.floor((dist / effectiveR) * radii.length), radii.length - 1);
+        setHoveredRing(bestRing);
         if (globalNormalizedBins.length > 0 && hoveredRingIndex !== -1) {
             const pct = globalNormalizedBins[hoveredRingIndex][binIndex];
             const color = getRingColor(hoveredRingIndex);
@@ -846,7 +1410,7 @@ canvasContainer.addEventListener('mousemove', (e) => {
             tooltip.innerHTML = `
                 <div style="display:flex;align-items:center;">
                     <span class="tooltip-dot" style="background:${color}"></span>
-                    <span style="color:#94a3b8;">${radii[hoveredRingIndex]}km Ring</span>
+                    <span style="color:#94a3b8;">${fmtR(radii[hoveredRingIndex])} km ring</span>
                 </div>
                 <div class="tooltip-val">${compassDir} (${Math.round(angleDeg)}°)</div>
                 <div style="font-size:0.85rem;color:#cbd5e1;margin-top:4px;">${pct.toFixed(2)}% of road length</div>
@@ -859,7 +1423,7 @@ canvasContainer.addEventListener('mousemove', (e) => {
             .map(g => ({ label: g.label, color: g.color, pct: globalTypeNorms[g.key][binIndex] }))
             .filter(e => e.pct > 0).sort((a, b) => b.pct - a.pct).slice(0, 4);
         if (topTypes.length === 0) { hideTooltip(); return; }
-        const rangeLabel = hoveredRingIndex !== -1 ? ` · within ${radii[hoveredRingIndex]}km` : '';
+        const rangeLabel = hoveredRingIndex !== -1 ? ` · within ${fmtR(radii[hoveredRingIndex])} km` : '';
         tooltip.style.display = 'block';
         tooltip.style.left = e.clientX + 'px';
         tooltip.style.top = e.clientY + 'px';
@@ -874,40 +1438,30 @@ canvasContainer.addEventListener('mousemove', (e) => {
 });
 
 canvasContainer.addEventListener('mouseleave', () => {
-    if (colorMode === 'radii' && hoveredRingIndex !== -1) {
-        hoveredRingIndex = -1; renderRadiiUI(); processAndDrawChart(); updateMapRings();
-    }
+    if (colorMode === 'radii') clearHoveredRing();
     hideTooltip();
 });
 
 // --- CSV Export ---
 function exportCSV() {
-    const cityName = document.getElementById('search-input').value.trim() || 'unknown';
+    const cityName = searchInput.value.trim() || 'unknown';
     const rows = [];
-
     if (colorMode === 'radii') {
         if (!globalNormalizedBins.length) return;
-        const headers = ['bearing_deg', 'compass', ...radii.map(r => `pct_within_${r}km`)];
-        rows.push(headers);
+        rows.push(['bearing_deg', 'compass', ...radii.map(r => `pct_within_${r}km`)]);
         for (let b = 0; b < numBins; b++) {
             const deg = Math.round(b * 360 / numBins);
-            const compass = getCompassDirection(deg);
-            const vals = radii.map((_, ring) => (globalNormalizedBins[ring]?.[b] ?? 0).toFixed(4));
-            rows.push([deg, compass, ...vals]);
+            rows.push([deg, getCompassDirection(deg), ...radii.map((_, ring) => (globalNormalizedBins[ring]?.[b] ?? 0).toFixed(4))]);
         }
     } else {
         if (!Object.keys(globalTypeNorms).length) return;
         const activeKeys = roadTypeGroups.filter(g => activeTypeGroups.has(g.key) && globalTypeNorms[g.key]);
-        const headers = ['bearing_deg', 'compass', ...activeKeys.map(g => `pct_${g.key}`)];
-        rows.push(headers);
+        rows.push(['bearing_deg', 'compass', ...activeKeys.map(g => `pct_${g.key}`)]);
         for (let b = 0; b < numBins; b++) {
             const deg = Math.round(b * 360 / numBins);
-            const compass = getCompassDirection(deg);
-            const vals = activeKeys.map(g => (globalTypeNorms[g.key]?.[b] ?? 0).toFixed(4));
-            rows.push([deg, compass, ...vals]);
+            rows.push([deg, getCompassDirection(deg), ...activeKeys.map(g => (globalTypeNorms[g.key]?.[b] ?? 0).toFixed(4))]);
         }
     }
-
     const csv = rows.map(r => r.join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const a = document.createElement('a');
@@ -917,4 +1471,14 @@ function exportCSV() {
     URL.revokeObjectURL(a.href);
 }
 
+// --- PNG Export ---
+function exportPNG() {
+    const cityName = searchInput.value.trim() || 'unknown';
+    const a = document.createElement('a');
+    a.href = canvas.toDataURL('image/png');
+    a.download = `road-orientations_${cityName.replace(/\s+/g, '-').toLowerCase()}.png`;
+    a.click();
+}
+
 document.getElementById('export-csv-btn').onclick = exportCSV;
+document.getElementById('export-png-btn').onclick = exportPNG;

@@ -3,115 +3,262 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OSM Road Orientations</title>
+    <title>Road Orientations</title>
 
     <script src="https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.js"></script>
     <link href="https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.css" rel="stylesheet" />
-
     <script src="https://unpkg.com/cheap-ruler@3.0.1/cheap-ruler.js"></script>
     <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
 
     <link rel="stylesheet" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 </head>
-<body class="sidebar-open">
+<body>
 
-    <button id="sidebar-toggle">✕</button>
+<div id="app">
 
-    <div id="sidebar">
-        <div class="sidebar-content">
-
-            <div class="sidebar-header">
-                <h3>Road Orientations</h3>
-            </div>
-
-            <details class="info-panel" open>
-                <summary>How to use</summary>
-                <p>Type a city in the search bar and pick from suggestions. Or drag the pin anywhere on the map. Add rings to compare distance bands. Hover a map ring to isolate it in the chart.</p>
-            </details>
-
-            <details class="info-panel" open>
-                <summary>How to read</summary>
-                <p>Each petal = a compass bearing. Longer = more road length that way. Both modes are <strong>cumulative</strong>: each ring includes all roads from the center outward. <strong>Radii</strong>: colors are distance bands. <strong>Detail</strong>: colors are road types — toggle below. Hover chart for values; hover a map ring to isolate that band.</p>
-            </details>
-
-            <details class="info-panel">
-                <summary>About the data</summary>
-                <p>Population from the <a href="https://ghsl.jrc.ec.europa.eu/" target="_blank" rel="noopener">GHSL 2025</a> grid via <a href="https://www.tomforth.co.uk/circlepopulations/" target="_blank" rel="noopener">Tom Forth's Ring Populations API</a>. Less accurate for small areas and rapidly-changing cities. Max radius 50 km.</p>
-                <p>Road orientations use live <a href="https://www.openstreetmap.org/" target="_blank" rel="noopener">OpenStreetMap</a> data via Overpass API, divided into 64 bearing bins (5.6° each). Larger radii fetch more data — expect a longer wait.</p>
-                <p><strong>H</strong> is orientation entropy (0–1): low = dominant grid direction, high = uniform/organic. <strong>km/km²</strong> is street density: total road length divided by circle area.</p>
-            </details>
-
-            <div class="sidebar-section">
-                <h4>Distance Radii (km)</h4>
-                <div id="radii-list"></div>
-                <button id="add-radius-btn" class="add-btn">+ Add Ring</button>
-            </div>
-
-            <div class="sidebar-section">
-                <div class="section-header-row">
-                    <h4>Road Types</h4>
-                    <div class="mode-pill">
-                        <button id="color-mode-radii" class="active">Radii</button>
-                        <button id="color-mode-type">Detail</button>
-                    </div>
-                </div>
-                <div id="road-type-list" style="display:none"></div>
-            </div>
-
-            <div class="sidebar-section">
-                <h4>Center</h4>
-                <div id="center-info" class="coord-text"></div>
-            </div>
-
-            <div class="sidebar-section" id="basemap-switcher">
-                <h4>Basemap</h4>
-                <div class="basemap-cards-row">
-                    <div id="basemap-card-streets" class="basemap-card active" onclick="setBasemap('streets')">
-                        <div class="basemap-thumb streets-thumb"></div>
-                        <span>Streets</span>
-                    </div>
-                    <div id="basemap-card-satellite" class="basemap-card" onclick="setBasemap('satellite')">
-                        <div class="basemap-thumb satellite-thumb"></div>
-                        <span>Satellite</span>
-                    </div>
-                </div>
-                <div id="vec-opacity-row">
-                    <span>Map overlay</span>
-                    <input type="range" id="vec-opacity-slider" min="0" max="100" value="55">
-                </div>
-            </div>
-
-            <div class="sidebar-section last">
-                <button id="export-csv-btn">Export CSV</button>
-            </div>
-
-        </div>
-    </div>
-
+  <!-- MAP AREA -->
+  <div id="map-area">
     <div id="map"></div>
 
-    <div id="map-attribution">
-        <button id="attr-toggle">©</button>
-        <div id="attr-text">© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors · © <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a> · © Esri (satellite)</div>
+    <!-- Floating search -->
+    <div id="map-search">
+      <div class="map-search-bar">
+        <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#aaa" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input id="search-input" type="text" placeholder="Search for a city…" autocomplete="off" spellcheck="false">
+        <button class="icon-btn" id="share-btn" title="Copy shareable link">⤴</button>
+      </div>
+      <div id="search-results"></div>
     </div>
 
-    <div id="search-container">
-        <input id="search-input" type="text" placeholder="Search for a city..." autocomplete="off" spellcheck="false">
-        <div id="search-results"></div>
-    </div>
-
-    <div id="chart-area">
-        <div id="chart-column">
-            <div id="canvas-container">
-                <canvas id="canvas"></canvas>
-                <div id="data-status" class="fast">FAST (MAP VIEW)</div>
-            </div>
+    <!-- Basemap float (hover to expand) -->
+    <div id="basemap-float">
+      <div class="basemap-popover">
+        <div class="basemap-opts-row">
+          <label class="basemap-opt" onclick="setBasemap('streets')">
+            <div class="basemap-thumb bm-streets active" id="bm-thumb-streets"></div>
+            <span>Streets</span>
+          </label>
+          <label class="basemap-opt" onclick="setBasemap('satellite')">
+            <div class="basemap-thumb bm-satellite" id="bm-thumb-satellite"></div>
+            <span>Satellite</span>
+          </label>
         </div>
+        <div id="vec-opacity-row">
+          <span>Overlay</span>
+          <input type="range" id="vec-opacity-slider" min="0" max="100" value="55">
+        </div>
+      </div>
+      <div class="basemap-toggle">
+        <div class="bm-streets" style="width:100%;height:100%;"></div>
+        <div class="basemap-toggle-label">Map</div>
+      </div>
     </div>
 
-    <div id="chart-tooltip"></div>
+    <!-- Attribution -->
+    <div id="map-attribution">
+      <button id="attr-toggle">©</button>
+      <div id="attr-text">© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors · © <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a> · © Esri (satellite)</div>
+    </div>
+  </div>
 
-    <script src="script.js"></script>
+  <!-- Resize handle -->
+  <div id="panel-resizer"></div>
+
+  <!-- RIGHT PANEL -->
+  <div id="panel">
+
+    <!-- Location header -->
+    <div class="panel-section location-header">
+      <div id="city-name">Ho Chi Minh City</div>
+      <div id="city-coords">10.8231° N, 106.6297° E</div>
+      <div class="badge-row">
+        <span id="data-status" class="data-badge fast">FAST</span>
+        <span class="tip below left-align" data-tip="FAST: using visible map tiles. PRECISE: full road data from OpenStreetMap via Overpass API. Click badge to retry on error.">?</span>
+      </div>
+    </div>
+
+    <!-- Tab bar -->
+    <div class="tab-bar">
+      <button class="tab-btn active" onclick="switchTab('roads',this)">Roads</button>
+      <button class="tab-btn" onclick="switchTab('people',this)">People</button>
+      <button class="tab-btn" onclick="switchTab('poi',this)">POI</button>
+      <button class="tab-btn" onclick="switchTab('landuse',this)">Land use</button>
+    </div>
+
+    <!-- Viz section — changes per tab -->
+    <div class="panel-section viz-section">
+
+      <!-- VIZ: Skeleton loader -->
+      <div class="viz-panel" id="viz-skeleton">
+        <div class="skel skel-circle"></div>
+        <div class="skel skel-toggle-bar"></div>
+        <div class="skeleton-stats">
+          <div class="skeleton-stat"><div class="skel skel-bar wide"></div><div class="skel skel-bar tall"></div><div class="skel skel-bar med"></div></div>
+          <div class="skeleton-stat"><div class="skel skel-bar wide"></div><div class="skel skel-bar tall"></div><div class="skel skel-bar med"></div></div>
+          <div class="skeleton-stat"><div class="skel skel-bar wide"></div><div class="skel skel-bar tall"></div><div class="skel skel-bar med"></div></div>
+        </div>
+      </div>
+
+      <!-- VIZ: Roads -->
+      <div class="viz-panel active" id="viz-roads">
+        <div class="rose-wrap">
+          <div id="canvas-container">
+            <canvas id="canvas"></canvas>
+          </div>
+        </div>
+        <div class="mode-toggle">
+          <button class="mode-btn active" id="color-mode-radii">Radii</button>
+          <button class="mode-btn" id="color-mode-type">Road types</button>
+        </div>
+        <div class="stats-row">
+          <div class="stat">
+            <div class="stat-label">Dominant <span class="tip" data-tip="The compass bearing pair with the most road length in the outermost ring.">?</span></div>
+            <div class="stat-value" id="stat-dominant">—</div>
+            <div class="stat-sub" id="stat-dominant-deg"></div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Entropy <span class="tip" data-tip="Orientation entropy (0–1): how evenly roads spread across all bearings. Low = grid, high = organic/radial. Shannon entropy across 64 bins.">?</span></div>
+            <div class="stat-value" id="stat-entropy">—</div>
+            <div class="stat-sub" id="stat-entropy-label"></div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Density <span class="tip" data-tip="Total physical road length ÷ circle area (km/km²).">?</span></div>
+            <div class="stat-value" id="stat-density">—</div>
+            <div class="stat-sub">km/km²</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- VIZ: People -->
+      <div class="viz-panel" id="viz-people">
+        <div class="rose-wrap">
+          <div id="people-canvas-container" class="canvas-container-round">
+            <canvas id="people-canvas"></canvas>
+          </div>
+        </div>
+        <div class="pop-bars" id="pop-bars"></div>
+        <div class="stats-row">
+          <div class="stat">
+            <div class="stat-label">Population <span class="tip" data-tip="Total people within the outermost ring. Source: GHSL 2025 via Tom Forth's API.">?</span></div>
+            <div class="stat-value" id="stat-pop-total">—</div>
+            <div class="stat-sub" id="stat-pop-range"></div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Transit/100K <span class="tip" data-tip="Bus, tram, and rail stops per 100,000 residents within the outermost ring. Rough proxy for transit supply.">?</span></div>
+            <div class="stat-value" id="stat-transit">—</div>
+            <div class="stat-sub">bus+rail stops</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Pop density <span class="tip" data-tip="Residents per km² within the outermost ring.">?</span></div>
+            <div class="stat-value" id="stat-pop-density">—</div>
+            <div class="stat-sub">per km²</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- VIZ: POI -->
+      <div class="viz-panel" id="viz-poi">
+        <div class="rose-wrap">
+          <div id="poi-canvas-container" class="canvas-container-square">
+            <canvas id="poi-canvas"></canvas>
+          </div>
+        </div>
+        <div id="poi-viz-inner"></div>
+      </div>
+
+      <!-- VIZ: Land use -->
+      <div class="viz-panel" id="viz-landuse">
+        <div class="coming-soon-viz">Land use data coming soon</div>
+      </div>
+
+    </div><!-- /viz-section -->
+
+    <!-- TAB: Roads -->
+    <div id="tab-roads" class="tab-panel active">
+      <div class="panel-section" style="overflow:visible;">
+        <div class="sec-heading">Distance rings</div>
+        <table class="rings-table">
+          <thead>
+            <tr>
+              <th>Ring</th>
+              <th>H <span class="tip" data-tip="Orientation entropy (0–1) for all roads within this radius. Low = streets point mostly one way. High = streets spread evenly.">?</span></th>
+              <th style="text-align:right"><span class="tip left-align" style="margin-right:3px;" data-tip="Street density: road length ÷ circle area (km/km²).">?</span>km/km²</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="rings-tbody"></tbody>
+        </table>
+        <div class="add-ring-row">
+          <button class="add-ring-btn" id="add-radius-btn">+ Add ring</button>
+        </div>
+      </div>
+      <div class="panel-section">
+        <div class="sec-heading">Road types <span class="tip" data-tip="Percentage of total road length by classification. Based on OpenStreetMap highway tags, cumulative across all rings.">?</span></div>
+        <div id="road-type-list" class="type-bars"></div>
+      </div>
+    </div>
+
+    <!-- TAB: People -->
+    <div id="tab-people" class="tab-panel">
+      <div class="panel-section" style="overflow:visible;">
+        <div class="sec-heading">Population by ring <span class="tip" data-tip="From GHSL 2025 population grid via Tom Forth's Ring Populations API. Less accurate for small areas and fast-growing cities.">?</span></div>
+        <table class="rings-table">
+          <thead>
+            <tr>
+              <th>Ring</th>
+              <th>Population <span class="tip" data-tip="Cumulative total within this radius.">?</span></th>
+              <th style="text-align:right">Transit <span class="tip left-align" data-tip="Bus · Tram · Rail stops within this radius. Per 100K shown below.">?</span></th>
+            </tr>
+          </thead>
+          <tbody id="people-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- TAB: POI -->
+    <div id="tab-poi" class="tab-panel">
+      <div class="panel-section" style="overflow:visible;">
+        <div class="sec-heading">Access by ring <span class="tip" data-tip="How many of 7 service categories have at least one location (binary presence) within each radius. Uses straight-line distance from OSM data — not walking-time isochrones.">?</span></div>
+        <table class="rings-table">
+          <thead>
+            <tr>
+              <th>Ring</th>
+              <th>POIs <span class="tip" data-tip="Total OSM points of interest within this radius across all 7 categories.">?</span></th>
+              <th style="text-align:right">Score <span class="tip left-align" data-tip="Categories with ≥1 location within this radius (out of 7). Binary: one restaurant counts the same as a hundred.">?</span></th>
+            </tr>
+          </thead>
+          <tbody id="poi-rings-tbody"></tbody>
+        </table>
+      </div>
+      <div class="panel-section last">
+        <div class="sec-heading">Category breakdown <span class="tip" data-tip="OSM POI counts for the selected ring (outermost by default). Hover a ring to switch. Counts shown for context — the score itself is binary (present/absent).">?</span></div>
+        <div id="poi-category-list"></div>
+      </div>
+    </div>
+
+    <!-- TAB: Land use -->
+    <div id="tab-landuse" class="tab-panel">
+      <div class="panel-section last">
+        <div class="coming-soon">Land use data coming soon.<br>Will show OSM landuse polygon breakdown per ring.</div>
+      </div>
+    </div>
+
+    <!-- Export -->
+    <div class="panel-section last">
+      <div class="sec-heading">Export</div>
+      <div class="export-row">
+        <button class="export-btn" id="export-png-btn">PNG Report</button>
+        <button class="export-btn secondary" id="export-csv-btn">CSV Data</button>
+      </div>
+    </div>
+
+  </div><!-- /panel -->
+
+</div><!-- /app -->
+
+<div id="chart-tooltip"></div>
+
+<script src="script.js"></script>
 </body>
 </html>
