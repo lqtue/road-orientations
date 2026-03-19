@@ -74,7 +74,12 @@ async function fetchRingPopulations() {
         const entry = Array.isArray(allData)
             ? (allData.find(d => d.distance === target) || allData.find(d => d.distance === Math.ceil(radius)))
             : null;
-        ringPopulations[radius] = entry ? entry.people : null;
+        ringPopulations[radius] = entry ? {
+            people: entry.people,
+            bus: entry.busStops || 0,
+            tram: entry.tramStops || 0,
+            rail: entry.railStops || 0
+        } : null;
     });
     renderRadiiUI();
 }
@@ -295,11 +300,23 @@ function renderRadiiUI() {
             row.style.boxShadow = `0 2px 8px ${getRingColor(i).replace('rgb', 'rgba').replace(')', ', 0.2)')}`;
         }
         const popVal = ringPopulations[radius];
-        const popText = popVal === undefined ? '…' : popVal === null ? 'N/A' : formatPop(popVal);
+        let popInner;
+        if (popVal === undefined) {
+            popInner = '<span class="pop-value">…</span>';
+        } else if (popVal === null) {
+            popInner = '<span class="pop-value">N/A</span>';
+        } else {
+            const transit = [];
+            if (popVal.bus > 0) transit.push(`${popVal.bus} bus`);
+            if (popVal.tram > 0) transit.push(`${popVal.tram} tram`);
+            if (popVal.rail > 0) transit.push(`${popVal.rail} rail`);
+            popInner = `<span class="pop-value">${formatPop(popVal.people)}</span>`;
+            if (transit.length) popInner += `<span class="pop-transit">${transit.join(' · ')}</span>`;
+        }
         row.innerHTML = `<div class="color-swatch" style="background-color: ${getRingColor(i)}"></div>
             <input type="number" value="${radius}" step="0.5" min="0.5" max="50" data-index="${i}">
             <span class="unit-label">km</span>
-            <span class="ring-pop">${popText}</span>
+            <span class="ring-pop">${popInner}</span>
             <button class="remove-btn">×</button>`;
 
         row.querySelector('input').onchange = (e) => {
