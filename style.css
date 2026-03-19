@@ -41,7 +41,7 @@ body { font-family: 'Inter', system-ui, sans-serif; color: var(--text); overflow
     width: var(--panel-width); flex-shrink: 0;
     background: var(--bg); border-left: var(--border);
     display: flex; flex-direction: column;
-    overflow-y: auto; overflow-x: clip;
+    overflow-y: auto; overflow-x: visible;
     box-shadow: -4px 0 20px rgba(0,0,0,0.04);
     min-width: 280px; max-width: 600px;
 }
@@ -226,10 +226,21 @@ body { font-family: 'Inter', system-ui, sans-serif; color: var(--text); overflow
     display: flex; align-items: center; gap: 8px;
     padding: 5px 6px; border-radius: 5px; cursor: default;
     border-left: 3px solid transparent;
-    transition: background 0.12s, border-color 0.12s;
+    transition: background 0.12s, border-color 0.12s, opacity 0.15s;
 }
-.type-row:hover { background: #fafafa; }
-.type-color { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.type-row:hover:not(.inactive) { background: #fafafa; }
+.type-row.inactive { opacity: 0.38; }
+.type-toggle {
+    width: 14px; height: 14px; border-radius: 3px;
+    border: 1.5px solid #ccc; background: #fff;
+    cursor: pointer; padding: 0; flex-shrink: 0;
+    transition: background 0.12s, border-color 0.12s;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px; color: #fff; font-weight: 800; line-height: 1;
+}
+.type-toggle.on { background: var(--c); border-color: var(--c); }
+.type-toggle.on::after { content: '✓'; }
+.type-toggle:hover { border-color: var(--c); }
 .type-label { width: 56px; font-size: 11px; color: #666; flex-shrink: 0; }
 .type-bar-wrap { flex: 1; height: 5px; background: #f0f0f0; border-radius: 3px; overflow: hidden; }
 .type-bar { height: 100%; border-radius: 3px; transition: width 0.3s ease; }
@@ -323,35 +334,20 @@ body { font-family: 'Inter', system-ui, sans-serif; color: var(--text); overflow
     width: 13px; height: 13px; border-radius: 50%;
     background: #ebebeb; color: #aaa;
     font-size: 8.5px; font-weight: 700; letter-spacing: 0;
-    cursor: help; flex-shrink: 0; position: relative; vertical-align: middle;
+    cursor: help; flex-shrink: 0; vertical-align: middle;
     text-transform: none;
 }
-.tip::before {
-    content: attr(data-tip);
-    position: absolute; bottom: calc(100% + 9px); left: 50%;
-    transform: translateX(-50%);
+
+/* ── Tip popup (fixed, JS-positioned) ── */
+#tip-popup {
+    position: fixed; display: none;
     background: #1a2332; color: #e8ecf0;
     font-size: 11px; line-height: 1.55; font-weight: 400;
     padding: 8px 11px; border-radius: 7px;
-    width: 210px; white-space: normal; text-align: left;
-    pointer-events: none; opacity: 0; transition: opacity 0.15s;
-    z-index: 999;
+    max-width: 220px; white-space: normal; text-align: left;
+    pointer-events: none; z-index: 9999;
     box-shadow: 0 6px 20px rgba(0,0,0,0.18);
-    letter-spacing: 0; text-transform: none;
 }
-.tip::after {
-    content: '';
-    position: absolute; bottom: calc(100% + 3px); left: 50%;
-    transform: translateX(-50%);
-    border: 5px solid transparent; border-top-color: #1a2332;
-    pointer-events: none; opacity: 0; transition: opacity 0.15s;
-    z-index: 999;
-}
-.tip:hover::before, .tip:hover::after { opacity: 1; }
-.tip.below::before { bottom: auto; top: calc(100% + 9px); }
-.tip.below::after  { bottom: auto; top: calc(100% + 3px); border-top-color: transparent; border-bottom-color: #1a2332; }
-.tip.left-align::before { left: 0; transform: none; }
-.tip.left-align::after  { left: 10px; transform: none; }
 
 /* ── Chart tooltip ── */
 #chart-tooltip {

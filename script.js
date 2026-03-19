@@ -686,16 +686,21 @@ document.getElementById('share-btn').onclick = () => {
 };
 
 // --- Color mode ---
+function setRoadTypeSection(visible) {
+    document.getElementById('road-type-section').style.display = visible ? '' : 'none';
+}
 document.getElementById('color-mode-radii').onclick = () => {
     colorMode = 'radii';
     document.getElementById('color-mode-radii').classList.add('active');
     document.getElementById('color-mode-type').classList.remove('active');
+    setRoadTypeSection(false);
     hoveredRingIndex = -1; processAndDrawChart(); updateMapRings();
 };
 document.getElementById('color-mode-type').onclick = () => {
     colorMode = 'type';
     document.getElementById('color-mode-type').classList.add('active');
     document.getElementById('color-mode-radii').classList.remove('active');
+    setRoadTypeSection(true);
     hoveredRingIndex = -1; processAndDrawChart(); updateMapRings();
 };
 
@@ -877,16 +882,28 @@ function renderRoadTypeUI() {
     container.innerHTML = '';
     roadTypeGroups.forEach(g => {
         const pct = total > 0 ? Math.round((typeLengths[g.key] / total) * 100) : 0;
+        const isOn = activeTypeGroups.has(g.key);
         const row = document.createElement('div');
-        row.className = 'type-row';
+        row.className = 'type-row' + (isOn ? '' : ' inactive');
         row.dataset.key = g.key;
         row.innerHTML = `
-            <div class="type-color" style="background:${g.color}"></div>
+            <button class="type-toggle${isOn ? ' on' : ''}" style="--c:${g.color}" title="${isOn ? 'Hide' : 'Show'} on chart &amp; map"></button>
             <div class="type-label">${g.label}</div>
             <div class="type-bar-wrap"><div class="type-bar" style="width:${pct}%;background:${g.color}"></div></div>
             <div class="type-pct">${pct}%</div>
         `;
+        row.querySelector('.type-toggle').addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (activeTypeGroups.has(g.key)) {
+                if (activeTypeGroups.size > 1) activeTypeGroups.delete(g.key);
+            } else {
+                activeTypeGroups.add(g.key);
+            }
+            renderRoadTypeUI();
+            processAndDrawChart();
+        });
         row.addEventListener('mouseenter', () => {
+            if (!activeTypeGroups.has(g.key)) return;
             hoveredTypeKey = g.key;
             row.style.borderLeftColor = g.color;
             processAndDrawChart();
@@ -899,6 +916,7 @@ function renderRoadTypeUI() {
         container.appendChild(row);
     });
 }
+
 
 // --- Update road stats (dominant, entropy, density) ---
 function updateRoadsStats() {
@@ -956,10 +974,18 @@ document.getElementById('add-radius-btn').onclick = () => {
 function extractLocalSegments() {
     const bounds = map.getBounds();
     const bbox = [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()];
-    const features = map.queryRenderedFeatures().filter(f =>
-        f.geometry && (f.geometry.type === 'LineString' || f.geometry.type === 'MultiLineString') &&
-        f.layer && f.layer['source-layer'] && (f.layer['source-layer'] === 'street' || f.layer['source-layer'] === 'transportation')
-    );
+    const seen = new Set();
+    const features = map.queryRenderedFeatures().filter(f => {
+        if (!f.geometry || !(f.geometry.type === 'LineString' || f.geometry.type === 'MultiLineString')) return false;
+        if (!f.layer?.['source-layer'] || (f.layer['source-layer'] !== 'street' && f.layer['source-layer'] !== 'transportation')) return false;
+        // Deduplicate: same road appears once per style layer; use feature ID if available
+        if (f.id != null) {
+            const uid = String(f.id);
+            if (seen.has(uid)) return false;
+            seen.add(uid);
+        }
+        return true;
+    });
     const segments = [];
     features.forEach(f => {
         const isTwoWay = f.properties.oneway !== 'yes' && f.properties.oneway !== 1 && f.properties.oneway !== true;
@@ -1055,17 +1081,25 @@ function processAndDrawChart() {
         const mLen = new Float64Array(radii.length);
         const mLenPhys = new Float64Array(radii.length);
         const maxRad = radii[radii.length - 1];
+        const filterByType = colorMode === 'type';
         currentSegments.forEach(seg => {
+            if (filterByType) {
+                const hw = seg.highway || '';
+                let active = false;
+                for (const g of roadTypeGroups) { if (g.types.has(hw) && activeTypeGroups.has(g.key)) { active = true; break; } }
+                if (!active) return;
+            }
             const mid = [(seg.p1[0] + seg.p2[0]) / 2, (seg.p1[1] + seg.p2[1]) / 2];
             const dist = ruler.distance(pinnedCenter, mid);
             if (dist > maxRad) return;
             let ri = 0;
             for (let rIdx = 0; rIdx < radii.length; rIdx++) { if (dist <= radii[rIdx]) { ri = rIdx; break; } }
             const len = ruler.distance(seg.p1, seg.p2);
-            const b0 = Math.round((ruler.bearing(seg.p1, seg.p2) + 360) * numBins / 360) % numBins;
-            const b1 = (b0 + numBins / 2) % numBins;
+            // Use undirected bearing (0–180°): a road at 45° and 225° are the same orientation
+            const brg = ruler.bearing(seg.p1, seg.p2);
+            const undirected = ((brg % 180) + 180) % 180;
+            const b0 = Math.round(undirected * numBins / 180) % numBins;
             mBins[ri][b0] += len; mLen[ri] += len; mLenPhys[ri] += len;
-            if (seg.isTwoWay) { mBins[ri][b1] += len; mLen[ri] += len; }
         });
         const cumBins = new Float64Array(numBins);
         let cumLenPhys = 0;
@@ -1085,7 +1119,8 @@ function processAndDrawChart() {
             const area = Math.PI * radii[i] * radii[i];
             newDensities.push(area > 0 ? cumLenPhys / area : 0);
         }
-        const key = newEntropies.map(e => e.toFixed(3)).join(',');
+        const filterSuffix = colorMode === 'type' ? '|' + [...activeTypeGroups].sort().join('+') : '';
+        const key = newEntropies.map(e => e.toFixed(3)).join(',') + filterSuffix;
         if (key !== lastMetricsKey) {
             lastMetricsKey = key;
             ringEntropies = newEntropies;
@@ -1329,7 +1364,7 @@ map.on('load', async () => {
     });
     map.addLayer({ id: 'satellite-layer', type: 'raster', source: 'satellite', layout: { visibility: 'none' } }, firstStyleLayerId);
 
-    updateCenterInfo(); renderRadiiUI(); renderPeopleUI(); renderPOIUI(); renderRoadTypeUI(); updateMapRings();
+    updateCenterInfo(); renderRadiiUI(); renderPeopleUI(); renderPOIUI(); renderRoadTypeUI();
     setTimeout(() => { triggerHybridAnalysis(); }, 400);
 
     // Restore last city or default to HCMC
@@ -1351,7 +1386,7 @@ map.on('load', async () => {
                 map.setCenter(pinnedCenter);
                 searchInput.value = 'Ho Chi Minh City';
                 document.getElementById('city-name').textContent = 'Ho Chi Minh City';
-                updateCenterInfo(); updateMapRings();
+                updateCenterInfo();
             }
         } catch(e) { console.error('Initial geocode failed', e); }
     }
@@ -1482,3 +1517,62 @@ function exportPNG() {
 
 document.getElementById('export-csv-btn').onclick = exportCSV;
 document.getElementById('export-png-btn').onclick = exportPNG;
+
+// --- Tip popup (fixed-position, viewport-aware) ---
+const tipPopup = document.getElementById('tip-popup');
+let activeTip = null;
+
+function showTipPopup(tip) {
+    const text = tip.dataset.tip;
+    if (!text) return;
+    tipPopup.textContent = text;
+    tipPopup.style.display = 'block';
+    tipPopup.style.visibility = 'hidden';
+    tipPopup.style.left = '-9999px';
+
+    // Measure after render
+    requestAnimationFrame(() => {
+        const rect = tip.getBoundingClientRect();
+        const pw = tipPopup.offsetWidth;
+        const ph = tipPopup.offsetHeight;
+        const gap = 8;
+        const margin = 10;
+
+        const preferBelow = tip.classList.contains('below');
+        let top, bottom;
+
+        if (preferBelow) {
+            top = rect.bottom + gap;
+            if (top + ph > window.innerHeight - margin) top = rect.top - ph - gap;
+        } else {
+            top = rect.top - ph - gap;
+            if (top < margin) top = rect.bottom + gap;
+        }
+
+        let left = rect.left + rect.width / 2 - pw / 2;
+        left = Math.max(margin, Math.min(left, window.innerWidth - pw - margin));
+
+        tipPopup.style.left = left + 'px';
+        tipPopup.style.top = top + 'px';
+        tipPopup.style.visibility = '';
+    });
+}
+
+document.addEventListener('mouseover', (e) => {
+    const tip = e.target.closest('.tip');
+    if (tip === activeTip) return;
+    activeTip = tip;
+    if (tip && tip.dataset.tip) {
+        showTipPopup(tip);
+    } else {
+        tipPopup.style.display = 'none';
+    }
+});
+
+document.addEventListener('mouseout', (e) => {
+    if (!activeTip) return;
+    if (!activeTip.contains(e.relatedTarget)) {
+        activeTip = null;
+        tipPopup.style.display = 'none';
+    }
+});

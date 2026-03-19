@@ -108,8 +108,8 @@
           </div>
         </div>
         <div class="mode-toggle">
-          <button class="mode-btn active" id="color-mode-radii">Radii</button>
-          <button class="mode-btn" id="color-mode-type">Road types</button>
+          <button class="mode-btn active" id="color-mode-radii">General</button>
+          <button class="mode-btn" id="color-mode-type">Details</button>
         </div>
         <div class="stats-row">
           <div class="stat">
@@ -193,7 +193,7 @@
           <button class="add-ring-btn" id="add-radius-btn">+ Add ring</button>
         </div>
       </div>
-      <div class="panel-section">
+      <div class="panel-section" id="road-type-section" style="display:none">
         <div class="sec-heading">Road types <span class="tip" data-tip="Percentage of total road length by classification. Based on OpenStreetMap highway tags, cumulative across all rings.">?</span></div>
         <div id="road-type-list" class="type-bars"></div>
       </div>
@@ -258,6 +258,7 @@
 </div><!-- /app -->
 
 <div id="chart-tooltip"></div>
+<div id="tip-popup"></div>
 
 <script src="script.js"></script>
 </body>
