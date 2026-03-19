@@ -297,14 +297,16 @@ function renderRadiiUI() {
         const popVal = ringPopulations[radius];
         const popText = popVal === undefined ? '…' : popVal === null ? 'N/A' : formatPop(popVal);
         row.innerHTML = `<div class="color-swatch" style="background-color: ${getRingColor(i)}"></div>
-            <input type="number" value="${radius}" step="0.5" min="0.5" data-index="${i}">
+            <input type="number" value="${radius}" step="0.5" min="0.5" max="50" data-index="${i}">
             <span class="unit-label">km</span>
             <span class="ring-pop">${popText}</span>
             <button class="remove-btn">×</button>`;
-        
+
         row.querySelector('input').onchange = (e) => {
             let val = parseFloat(e.target.value);
-            if (val > 0) { radii[i] = val; radii.sort((a, b) => a - b); renderRadiiUI(); triggerHybridAnalysis(); updateMapRings(); }
+            val = Math.min(50, Math.max(0.5, val));
+            e.target.value = val;
+            radii[i] = val; radii.sort((a, b) => a - b); renderRadiiUI(); triggerHybridAnalysis(); updateMapRings();
         };
         row.querySelector('.remove-btn').onclick = () => {
             if (radii.length > 1) { radii.splice(i, 1); hoveredRingIndex = -1; renderRadiiUI(); triggerHybridAnalysis(); updateMapRings(); }
@@ -313,7 +315,11 @@ function renderRadiiUI() {
     });
 }
 
-document.getElementById('add-radius-btn').onclick = () => { radii.push(radii[radii.length - 1] + 2.0); renderRadiiUI(); triggerHybridAnalysis(); updateMapRings(); };
+document.getElementById('add-radius-btn').onclick = () => {
+    const next = Math.min(50, radii[radii.length - 1] + 2.0);
+    if (next === radii[radii.length - 1]) return; // already at max
+    radii.push(next); renderRadiiUI(); triggerHybridAnalysis(); updateMapRings();
+};
 
 function renderRoadTypeUI() {
     const container = document.getElementById('road-type-list');
