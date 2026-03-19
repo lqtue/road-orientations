@@ -43,31 +43,40 @@ async function fetchRingPopulations() {
     renderRadiiUI();
     const lat = pinnedCenter[1].toFixed(4);
     const lng = pinnedCenter[0].toFixed(4);
-    const snapshot = [...radii]; // capture in case radii change mid-fetch
-    for (const radius of snapshot) {
-        const key = `${lat},${lng},${radius}`;
-        if (popCache[key] !== undefined) {
-            ringPopulations[radius] = popCache[key];
-            renderRadiiUI();
-            continue;
-        }
+    const snapshot = [...radii];
+    const maxRadius = Math.ceil(Math.max(...snapshot));
+    const cacheKey = `pop:${lat},${lng},${maxRadius}`;
+
+    let allData = popCache[cacheKey];
+    if (!allData) {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 8000);
         try {
-            const res = await fetch(`https://ringpopulationsapi.azurewebsites.net/api/globalringpopulations?latitude=${lat}&longitude=${lng}&distance_km=${radius}`, { signal: controller.signal });
+            const res = await fetch(
+                `https://ringpopulationsapi.azurewebsites.net/api/globalringpopulations?latitude=${lat}&longitude=${lng}&distance_km=${maxRadius}`,
+                { signal: controller.signal }
+            );
             clearTimeout(timeoutId);
-            const data = await res.json();
-            popCache[key] = data.people ?? data.population ?? null;
-            ringPopulations[radius] = popCache[key];
-            renderRadiiUI();
+            allData = await res.json(); // array of { distance, people, ... }
+            popCache[cacheKey] = allData;
         } catch(e) {
             clearTimeout(timeoutId);
             console.error('Population fetch failed', e);
-            popCache[key] = null;
-            ringPopulations[radius] = null;
+            snapshot.forEach(r => { ringPopulations[r] = null; });
             renderRadiiUI();
+            return;
         }
     }
+
+    // API returns one entry per integer km up to maxRadius — match each radius to nearest
+    snapshot.forEach(radius => {
+        const target = Math.round(radius);
+        const entry = Array.isArray(allData)
+            ? (allData.find(d => d.distance === target) || allData.find(d => d.distance === Math.ceil(radius)))
+            : null;
+        ringPopulations[radius] = entry ? entry.people : null;
+    });
+    renderRadiiUI();
 }
 
 // Global storage for tooltip math
