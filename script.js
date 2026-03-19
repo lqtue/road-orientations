@@ -32,6 +32,11 @@ let activeAbortController = null;
 const popCache = {}; // key: "lat,lng,radius" → people count
 let ringPopulations = {}; // key: radius → people count (current center)
 
+// --- Ring metrics (computed from road segments) ---
+let ringEntropies = [];   // normalized Shannon entropy [0,1] per ring (cumulative)
+let ringDensities = [];   // street density km/km² per ring (cumulative)
+let lastMetricsKey = '';  // prevents redundant DOM updates on hover redraws
+
 function formatPop(n) {
     if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
     if (n >= 1e3) return Math.round(n / 1e3) + 'K';
@@ -313,6 +318,10 @@ function renderRadiiUI() {
             popInner = `<span class="pop-value">${formatPop(popVal.people)}</span>`;
             if (transit.length) popInner += `<span class="pop-transit">${transit.join(' · ')}</span>`;
         }
+        const ent = ringEntropies[i], den = ringDensities[i];
+        if (ent !== undefined) {
+            popInner += `<span class="pop-metrics">H ${ent.toFixed(2)} · ${den.toFixed(1)} km/km²</span>`;
+        }
         row.innerHTML = `<div class="color-swatch" style="background-color: ${getRingColor(i)}"></div>
             <input type="number" value="${radius}" step="0.5" min="0.5" max="50" data-index="${i}">
             <span class="unit-label">km</span>
@@ -472,6 +481,51 @@ function processAndDrawChart() {
     if (!currentSegments || currentSegments.length === 0) { ctx.restore(); return; }
 
     const ruler = new CheapRuler(pinnedCenter[1]);
+
+    // --- Ring metrics: entropy + street density (always runs, independent of color mode) ---
+    {
+        const mBins = Array.from({ length: radii.length }, () => new Float64Array(numBins));
+        const mLen = new Float64Array(radii.length);     // weighted length for entropy (two-way counted twice)
+        const mLenPhys = new Float64Array(radii.length); // physical road length for density
+        const maxRad = radii[radii.length - 1];
+        currentSegments.forEach(seg => {
+            const mid = [(seg.p1[0] + seg.p2[0]) / 2, (seg.p1[1] + seg.p2[1]) / 2];
+            const dist = ruler.distance(pinnedCenter, mid);
+            if (dist > maxRad) return;
+            let ri = 0;
+            for (let rIdx = 0; rIdx < radii.length; rIdx++) { if (dist <= radii[rIdx]) { ri = rIdx; break; } }
+            const len = ruler.distance(seg.p1, seg.p2);
+            const b0 = Math.round((ruler.bearing(seg.p1, seg.p2) + 360) * numBins / 360) % numBins;
+            const b1 = (b0 + numBins / 2) % numBins;
+            mBins[ri][b0] += len; mLen[ri] += len; mLenPhys[ri] += len;
+            if (seg.isTwoWay) { mBins[ri][b1] += len; mLen[ri] += len; }
+        });
+        const cumBins = new Float64Array(numBins);
+        let cumLenPhys = 0;
+        const newEntropies = [], newDensities = [];
+        for (let i = 0; i < radii.length; i++) {
+            for (let b = 0; b < numBins; b++) cumBins[b] += mBins[i][b];
+            cumLenPhys += mLenPhys[i];
+            const tot = cumBins.reduce((s, v) => s + v, 0);
+            let H = 0;
+            if (tot > 0) {
+                for (let b = 0; b < numBins; b++) {
+                    if (cumBins[b] > 0) { const p = cumBins[b] / tot; H -= p * Math.log2(p); }
+                }
+                H /= Math.log2(numBins); // normalize to [0, 1]
+            }
+            newEntropies.push(H);
+            const area = Math.PI * radii[i] * radii[i];
+            newDensities.push(area > 0 ? cumLenPhys / area : 0);
+        }
+        const key = newEntropies.map(e => e.toFixed(3)).join(',');
+        if (key !== lastMetricsKey) {
+            lastMetricsKey = key;
+            ringEntropies = newEntropies;
+            ringDensities = newDensities;
+            renderRadiiUI();
+        }
+    }
 
     if (colorMode === 'radii') {
         // --- Radii mode: cumulative rings, colored by distance band ---

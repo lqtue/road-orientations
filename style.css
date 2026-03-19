@@ -59,7 +59,7 @@ h4 { margin: 0 0 10px 0; font-size: 0.75rem; text-transform: uppercase; letter-s
 input[type="number"] { width: 55px; padding: 5px 6px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.85rem; outline: none; margin-right: 6px; }
 .unit-label { font-size: 0.8rem; color: var(--text-secondary); }
 .ring-pop { display: flex; flex-direction: column; gap: 1px; font-size: 0.75rem; color: var(--text-secondary); margin-left: 6px; margin-right: auto; min-width: 0; }
-.pop-transit { font-size: 0.68rem; opacity: 0.75; }
+.pop-transit, .pop-metrics { font-size: 0.68rem; opacity: 0.75; }
 .info-panel p a { color: var(--text-primary); text-decoration: none; }
 .info-panel p a:hover { text-decoration: underline; }
 .remove-btn { color: #ef4444; opacity: 0.4; padding: 2px 6px; border: none; background: none; cursor: pointer; font-weight: bold; }
